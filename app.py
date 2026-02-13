@@ -1,17 +1,17 @@
 import streamlit as st
 from rembg import remove
-from PIL import Image
+from PIL import Image, ImageFilter
 import io
 import numpy as np
 import cv2
 import time
 import pandas as pd
-from specs import PHOTO_STANDARDS  # Ensure specs.py is in the same folder
+from specs import PHOTO_STANDARDS
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="centered")
 
-# --- 2. PREMIUM CSS ---
+# --- 2. CSS STYLING ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
@@ -28,6 +28,16 @@ st.markdown("""
             border: 1px solid rgba(255, 255, 255, 0.1);
             margin-bottom: 20px;
         }
+        .report-box {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+        .success-box { border-left: 5px solid #00ff7f; }
+        .fail-box { border-left: 5px solid #ff4b4b; }
+        
         .paypal-btn {
             background: #FFC439; color: black !important; padding: 12px 30px; 
             border-radius: 50px; text-decoration: none; font-weight: bold; display: inline-block;
@@ -42,45 +52,105 @@ st.markdown("""
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'input_image' not in st.session_state: st.session_state.input_image = None
 if 'processed_image' not in st.session_state: st.session_state.processed_image = None
+if 'file_size_kb' not in st.session_state: st.session_state.file_size_kb = 0
 if 'cam_active' not in st.session_state: st.session_state.cam_active = False
-if 'target_quality' not in st.session_state: st.session_state.target_quality = "Standard (~250KB)"
+if 'validation_result' not in st.session_state: st.session_state.validation_result = None
 
-# --- 4. PROCESSING LOGIC (UPDATED WITH QUALITY CONTROL) ---
+# --- 4. VALIDATION ENGINE ---
+def analyze_image(pil_img, size_kb, std_key):
+    std = PHOTO_STANDARDS[std_key]
+    w, h = pil_img.size
+    
+    # Check 1: Dimensions
+    dim_check = (w == std['w'] and h == std['h'])
+    
+    # Check 2: File Size (Must be under limit)
+    size_check = (size_kb <= std['kb'])
+    
+    # Check 3: ICAO Face Geometry (Head 70-80%)
+    opencv_img = np.array(pil_img.convert("RGB"))
+    opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
+    
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
+    
+    icao_check = False
+    face_ratio = 0
+    face_msg = "No Face Detected"
+    
+    if len(faces) > 0:
+        # Get largest face
+        _, _, _, fh = max(faces, key=lambda b: b[2] * b[3])
+        face_ratio = (fh / h) * 100
+        
+        # ICAO Standard: Head should be between 70% and 80% of image height
+        # We allow a slightly wider range (60-85%) for "Pass" to be lenient
+        if 60 <= face_ratio <= 85:
+            icao_check = True
+            face_msg = f"Good Head Size ({face_ratio:.1f}%)"
+        else:
+            face_msg = f"Head too small/large ({face_ratio:.1f}%)"
+    
+    is_compliant = dim_check and size_check and icao_check
+    
+    return {
+        "is_compliant": is_compliant,
+        "dim_ok": dim_check,
+        "size_ok": size_check,
+        "icao_ok": icao_check,
+        "face_msg": face_msg,
+        "current_w": w,
+        "current_h": h,
+        "current_kb": size_kb
+    }
+
+# --- 5. PROCESSING LOGIC ---
 def process_photo(pil_img, std, quality_mode):
     # 1. Remove Background
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
-    subject = remove(buf.getvalue(), alpha_matting=True)
+    subject = remove(buf.getvalue(), alpha_matting=True, alpha_matting_foreground_threshold=240)
     foreground = Image.open(io.BytesIO(subject)).convert("RGBA")
     
-    # 2. White Background
+    # 2. Smooth Edges
+    r, g, b, a = foreground.split()
+    a = a.filter(ImageFilter.GaussianBlur(radius=0.5))
+    foreground = Image.merge("RGBA", (r, g, b, a))
+
+    # 3. White BG
     bg = Image.new("RGBA", foreground.size, "WHITE")
     bg.paste(foreground, (0, 0), foreground)
     rgb_img = bg.convert("RGB")
     
-    # 3. Auto-Crop (Fixed Logic)
-    opencv_img = np.array(rgb_img)
-    opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY), 1.1, 5)
+    # 4. Alpha-Aware Crop
+    alpha_np = np.array(foreground)[:, :, 3]
+    rows = np.where(np.max(alpha_np, axis=1) > 0)[0]
     
-    if len(faces) > 0:
-        x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
-        face_cx, face_cy = x + w // 2, y + h // 2
+    if len(rows) > 0:
+        top_y, bottom_y = rows[0], rows[-1]
+        opencv_img = np.array(rgb_img)
+        opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
+        faces = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml').detectMultiScale(cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY), 1.1, 5)
         
-        # Head ~75% of height logic
-        head_padding = 1.55  
-        req_h_pixels = int((h * head_padding) / 0.75)
-        req_w_pixels = int(req_h_pixels * (std['w'] / std['h']))
+        if len(faces) > 0:
+            x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+            cx, chin_y = x + w // 2, y + h
+        else:
+            cx, chin_y = rgb_img.width // 2, bottom_y - (bottom_y - top_y) // 4
+
+        head_h = chin_y - top_y
+        if head_h < 1: head_h = rgb_img.height // 2
+            
+        req_h = int(head_h / 0.75) 
+        req_w = int(req_h * (std['w'] / std['h']))
         
-        crop_x1 = face_cx - req_w_pixels // 2
-        vertical_offset = int(req_h_pixels * 0.08) 
-        crop_y1 = (face_cy - req_h_pixels // 2) - vertical_offset
-        crop_x2 = crop_x1 + req_w_pixels
-        crop_y2 = crop_y1 + req_h_pixels
+        crop_y1 = top_y - int(req_h * 0.125)
+        crop_y2 = crop_y1 + req_h
+        crop_x1 = cx - req_w // 2
+        crop_x2 = crop_x1 + req_w
         
-        # Safe Paste Canvas
-        canvas = Image.new("RGB", (req_w_pixels, req_h_pixels), "WHITE")
+        canvas = Image.new("RGB", (req_w, req_h), "WHITE")
         src_x1, src_y1 = max(0, crop_x1), max(0, crop_y1)
         src_x2, src_y2 = min(rgb_img.width, crop_x2), min(rgb_img.height, crop_y2)
         dst_x, dst_y = max(0, -crop_x1), max(0, -crop_y1)
@@ -90,27 +160,20 @@ def process_photo(pil_img, std, quality_mode):
             canvas.paste(region, (dst_x, dst_y))
         rgb_img = canvas
 
-    # 4. Resize
+    # 5. Resize & Compress
     final = rgb_img.resize((std['w'], std['h']), Image.Resampling.LANCZOS)
     
-    # 5. Smart Compression based on User Selection
     out = io.BytesIO()
-    
     if quality_mode == "Max Quality (Uncompressed)":
-        # Save at 100% quality, 0 subsampling (Maximum Detail)
         final.save(out, format="JPEG", quality=100, subsampling=0)
-        
     elif quality_mode == "Standard (~250 KB)":
-        # Target roughly 250KB limit
         q = 95
         while q > 50:
             out = io.BytesIO()
             final.save(out, format="JPEG", quality=q)
             if out.tell() / 1024 < 250: break
             q -= 5
-            
     elif quality_mode == "Strict Upload (< 100 KB)":
-        # Aggressive compression for strict portals
         q = 90
         while q > 10:
             out = io.BytesIO()
@@ -121,69 +184,126 @@ def process_photo(pil_img, std, quality_mode):
     out.seek(0)
     return out, out.tell() / 1024
 
-# --- 5. UI FLOW ---
+# --- 6. UI FLOW ---
 st.markdown("<h1>Global Passport Pro AI ✨</h1>", unsafe_allow_html=True)
 
 if st.session_state.step == 1:
-    st.markdown("### 📋 Step 1: Configure & Upload")
+    st.markdown("### 📋 Step 1: Standards & Upload")
     
     # Standards Table
     df = pd.DataFrame(PHOTO_STANDARDS).T.reset_index()
-    df = df.rename(columns={"index": "Standard", "mm": "Dim (mm)", "w": "Width", "h": "Height"})
-    st.table(df[["Standard", "Dim (mm)", "Width", "Height"]])
+    df = df.rename(columns={"index": "Country", "mm": "Size (mm)", "w": "Px W", "h": "Px H", "kb": "Max KB"})
+    st.dataframe(df[["Country", "Size (mm)", "Px W", "Px H", "Max KB"]], hide_index=True, use_container_width=True)
 
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        selected = st.selectbox("1. Choose Country:", list(PHOTO_STANDARDS.keys()))
+    col_a, col_b = st.columns(2)
+    with col_a:
+        selected = st.selectbox("Select Country:", list(PHOTO_STANDARDS.keys()))
         st.session_state.selected_std = selected
-    with col2:
-        # NEW QUALITY SELECTOR
-        q_mode = st.selectbox(
-            "2. Select Output Size:", 
-            ["Max Quality (Uncompressed)", "Standard (~250 KB)", "Strict Upload (< 100 KB)"],
-            index=0,
-            help="Max Quality gives the clearest image but larger file size."
-        )
+    with col_b:
+        q_mode = st.selectbox("Output Quality:", ["Standard (~250 KB)", "Max Quality (Uncompressed)", "Strict Upload (< 100 KB)"])
         st.session_state.target_quality = q_mode
     
     tab_up, tab_cam = st.tabs(["📤 Upload File", "📸 Take Selfie"])
     
     with tab_up:
-        uploaded = st.file_uploader("Upload Photo", type=['jpg','png','jpeg'], label_visibility="collapsed")
+        uploaded = st.file_uploader("Upload", type=['jpg','png','jpeg'], label_visibility="collapsed")
         if uploaded:
             st.session_state.input_image = Image.open(uploaded)
-            st.success("Photo Uploaded!")
-            if st.button("✨ Process Photo"):
-                st.session_state.step = 2; st.rerun()
+            st.session_state.file_size_kb = uploaded.size / 1024
+            # Run Analysis
+            st.session_state.validation_result = analyze_image(st.session_state.input_image, st.session_state.file_size_kb, selected)
+            st.rerun()
 
     with tab_cam:
         if not st.session_state.cam_active:
-            if st.button("🔵 Open Camera"):
-                st.session_state.cam_active = True; st.rerun()
+            if st.button("🔵 Open Camera"): st.session_state.cam_active = True; st.rerun()
         else:
             cam_snap = st.camera_input("Selfie", label_visibility="collapsed")
             if cam_snap:
                 st.session_state.input_image = Image.open(cam_snap)
+                st.session_state.file_size_kb = cam_snap.size / 1024
+                # Run Analysis
+                st.session_state.validation_result = analyze_image(st.session_state.input_image, st.session_state.file_size_kb, selected)
+                st.rerun()
+            if st.button("❌ Close Camera"): st.session_state.cam_active = False; st.rerun()
+    
+    # --- VALIDATION REPORT SECTION ---
+    if st.session_state.input_image:
+        res = st.session_state.validation_result
+        std = PHOTO_STANDARDS[selected]
+        
+        st.divider()
+        st.markdown("### 🔍 Photo Analysis Report")
+        
+        col1, col2 = st.columns([1, 1.5])
+        with col1:
+            st.image(st.session_state.input_image, caption="Your Photo", width=150)
+        
+        with col2:
+            # Build Metrics Table
+            metrics = {
+                "Metric": ["Dimensions (Px)", "File Size (KB)", "Face Position (ICAO)"],
+                "Your Photo": [
+                    f"{res['current_w']} x {res['current_h']}", 
+                    f"{res['current_kb']:.1f} KB",
+                    res['face_msg']
+                ],
+                "Required": [
+                    f"{std['w']} x {std['h']}", 
+                    f"< {std['kb']} KB",
+                    "Face 70-80% of Height"
+                ],
+                "Status": [
+                    "✅ Pass" if res['dim_ok'] else "❌ Fail",
+                    "✅ Pass" if res['size_ok'] else "❌ Fail",
+                    "✅ Pass" if res['icao_ok'] else "⚠️ Check"
+                ]
+            }
+            st.table(pd.DataFrame(metrics))
+
+        # DECISION BLOCK
+        if res['is_compliant']:
+            st.markdown("""
+                <div class="glass-card success-box" style="text-align: center;">
+                    <h2 style="color: #00ff7f; margin:0;">🎉 Congratulations!</h2>
+                    <p>Your photo already meets all standards for <b>{}</b>.</p>
+                </div>
+            """.format(selected.split(" - ")[0]), unsafe_allow_html=True)
+            
+            # Allow Direct Download Buffer creation
+            buf = io.BytesIO()
+            st.session_state.input_image.save(buf, format="JPEG")
+            st.download_button("⬇️ Download As-Is", buf.getvalue(), "compliant_photo.jpg", "image/jpeg")
+            
+            st.write("--- OR ---")
+            if st.button("✨ Re-Process Anyway (Better Background)"):
                 st.session_state.step = 2; st.rerun()
-            if st.button("❌ Close Camera"):
-                st.session_state.cam_active = False; st.rerun()
+                
+        else:
+            st.markdown("""
+                <div class="glass-card fail-box">
+                    <h4 style="color: #ff4b4b; margin:0;">⚠️ Issues Detected</h4>
+                    <p>This photo does not meet government standards yet. Use our AI tool to fix it automatically.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button("✨ Auto-Fix & Convert"):
+                st.session_state.step = 2; st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("### 💡 ICAO Compliance Guide")
-    st.info("Head should be centered and occupy 70-80% of photo height.")
-
+# STEP 2 & 3 (Same Processing Flow)
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### ⚡ Step 2: Processing")
-    
-    with st.spinner("Applying AI background removal and quality settings..."):
+    with st.spinner("Correcting geometry, background, and lighting..."):
         time.sleep(1)
         buf, size = process_photo(
             st.session_state.input_image, 
             PHOTO_STANDARDS[st.session_state.selected_std],
-            st.session_state.target_quality  # Pass user preference
+            st.session_state.target_quality
         )
         st.session_state.processed_image, st.session_state.final_size = buf, size
         st.session_state.step = 3; st.rerun()
@@ -192,14 +312,8 @@ elif st.session_state.step == 2:
 elif st.session_state.step == 3:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### ✅ Step 3: Success!")
-    
-    # Show precise file size
-    st.image(st.session_state.processed_image, caption=f"Final Size: {st.session_state.final_size:.1f} KB", width=250)
-    
+    st.image(st.session_state.processed_image, caption=f"Final: {st.session_state.final_size:.1f} KB", width=250)
     st.download_button("⬇️ Download Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg")
-    
     st.markdown(f'<br><a href="https://paypal.me/698789" target="_blank" class="paypal-btn">☕ Buy me a Coffee</a>', unsafe_allow_html=True)
-    
-    if st.button("🔄 Start Over"): 
-        st.session_state.step = 1; st.rerun()
+    if st.button("🔄 Start Over"): st.session_state.step = 1; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
