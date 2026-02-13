@@ -6,7 +6,7 @@ import numpy as np
 import cv2
 import time
 import pandas as pd
-from specs import PHOTO_STANDARDS  # IMPORTING YOUR RESEARCHED SPECS
+from specs import PHOTO_STANDARDS  # Import specs from the file above
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="centered")
@@ -14,7 +14,12 @@ st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="c
 # --- 2. PREMIUM CSS ---
 st.markdown("""
     <style>
-        .stApp { background: linear-gradient(-45deg, #0f0c29, #1a1a2e, #16213e); color: white; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        .stApp { 
+            background: linear-gradient(-45deg, #0f0c29, #1a1a2e, #16213e); 
+            color: white; 
+            font-family: 'Inter', sans-serif;
+        }
         .glass-card {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(10px);
@@ -29,6 +34,8 @@ st.markdown("""
         }
         h1, h3, p { text-align: center; }
         #MainMenu, footer, header {visibility: hidden;}
+        /* Accessible Label Hiding */
+        .stFileUploader label, .stCameraInput label { display: none; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -36,6 +43,7 @@ st.markdown("""
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'input_image' not in st.session_state: st.session_state.input_image = None
 if 'processed_image' not in st.session_state: st.session_state.processed_image = None
+if 'cam_active' not in st.session_state: st.session_state.cam_active = False
 
 # --- 4. PROCESSING LOGIC ---
 def process_photo(pil_img, std):
@@ -89,25 +97,46 @@ if st.session_state.step == 1:
     selected = st.selectbox("Select Target Destination:", list(PHOTO_STANDARDS.keys()))
     st.session_state.selected_std = selected
     
-    uploaded = st.file_uploader("Upload or Drag Photo", type=['jpg','png','jpeg'])
-    if uploaded:
-        st.session_state.input_image = Image.open(uploaded)
-        # Validation
-        curr_w, curr_h = st.session_state.input_image.size
-        std = PHOTO_STANDARDS[selected]
-        if curr_w == std['w'] and curr_h == std['h']:
-            st.success("✅ Photo already matches dimensions!")
+    # Upload vs Camera Tabs
+    tab_up, tab_cam = st.tabs(["📤 Upload File", "📸 Take Selfie"])
+    
+    with tab_up:
+        uploaded = st.file_uploader("Upload Image", type=['jpg','png','jpeg'], label_visibility="collapsed")
+        if uploaded:
+            st.session_state.input_image = Image.open(uploaded)
+            # Basic Validation Check
+            curr_w, curr_h = st.session_state.input_image.size
+            std = PHOTO_STANDARDS[selected]
+            if curr_w == std['w'] and curr_h == std['h']:
+                st.success("✅ Photo matches dimensions!")
+            else:
+                st.warning(f"⚠️ Original: {curr_w}x{curr_h} px. Will be resized to {std['w']}x{std['h']} px.")
+            
+            if st.button("✨ Auto-Fix & Convert"):
+                st.session_state.step = 2; st.rerun()
+
+    with tab_cam:
+        if not st.session_state.cam_active:
+            if st.button("🔵 Open Camera"):
+                st.session_state.cam_active = True; st.rerun()
         else:
-            st.warning(f"⚠️ Photo is {curr_w}x{curr_h}. Needs to be {std['w']}x{std['h']}.")
-        
-        if st.button("✨ Auto-Fix & Convert"):
-            st.session_state.step = 2; st.rerun()
+            cam_snap = st.camera_input("Selfie", label_visibility="collapsed")
+            if cam_snap:
+                st.session_state.input_image = Image.open(cam_snap)
+                st.session_state.step = 2; st.rerun()
+            if st.button("❌ Close Camera"):
+                st.session_state.cam_active = False; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ICAO COMPLIANCE DIAGRAM TRIGGER
+    # ICAO COMPLIANCE GUIDE
     st.markdown("### 💡 ICAO Compliance Guide")
-    st.write("Ensure your photo follows these geometric rules:")
-    st.markdown("")
+    st.info("""
+    **To ensure your photo is accepted:**
+    1. **Face:** Must be fully visible, looking straight at the camera.
+    2. **Expression:** Neutral expression, mouth closed, eyes open.
+    3. **Position:** Head should be centered and cover 70-80% of the photo height.
+    4. **Lighting:** Even lighting, no shadows on face or background.
+    """)
 
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
@@ -122,9 +151,14 @@ elif st.session_state.step == 2:
 elif st.session_state.step == 3:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### ✅ Step 3: Success!")
+    
+    # Display Result
     st.image(st.session_state.processed_image, caption=f"Compliant Result: {st.session_state.final_size:.1f} KB", width=250)
+    
     st.download_button("⬇️ Download High-Res Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg")
+    
     st.markdown(f'<br><a href="https://paypal.me/698789" target="_blank" class="paypal-btn">☕ Buy me a Coffee</a>', unsafe_allow_html=True)
+    
     if st.button("🔄 New Photo"): 
         st.session_state.step = 1; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)

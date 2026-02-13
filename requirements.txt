@@ -1,5 +1,5 @@
 streamlit
 rembg[cpu]
 opencv-python-headless
-numpy<2.4
+numpy
 pillow
