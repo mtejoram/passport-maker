@@ -5,224 +5,126 @@ import io
 import numpy as np
 import cv2
 import time
+import pandas as pd
+from specs import PHOTO_STANDARDS  # IMPORTING YOUR RESEARCHED SPECS
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(
-    page_title="Passport AI",
-    page_icon="✨",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
+# --- 1. PAGE CONFIG ---
+st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="centered")
 
-# --- 2. SESSION STATE MANAGEMENT (The "Wizard" Logic) ---
-if 'step' not in st.session_state:
-    st.session_state.step = 1
-if 'input_image' not in st.session_state:
-    st.session_state.input_image = None
-if 'processed_image' not in st.session_state:
-    st.session_state.processed_image = None
-
-def reset_app():
-    st.session_state.step = 1
-    st.session_state.input_image = None
-    st.session_state.processed_image = None
-    st.rerun()
-
-# --- 3. HIGH-END STYLING ---
+# --- 2. PREMIUM CSS ---
 st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-        
-        /* DARK AURORA BACKGROUND */
-        .stApp {
-            background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e);
-            background-size: 400% 400%;
-            animation: gradient 15s ease infinite;
-            font-family: 'Inter', sans-serif;
-            color: white;
-        }
-        @keyframes gradient {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-
-        /* GLASS CARD */
+        .stApp { background: linear-gradient(-45deg, #0f0c29, #1a1a2e, #16213e); color: white; }
         .glass-card {
             background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(16px);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 25px;
             border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 24px;
-            padding: 30px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-            text-align: center;
+            margin-bottom: 20px;
         }
-
-        /* BUTTONS */
-        div.stButton > button {
-            background: linear-gradient(90deg, #00C9FF 0%, #92FE9D 100%);
-            color: #002d40;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 12px;
-            font-weight: 700;
-            font-size: 16px;
-            width: 100%;
-            transition: transform 0.2s;
-        }
-        div.stButton > button:hover {
-            transform: scale(1.02);
-            box-shadow: 0 0 20px rgba(0, 201, 255, 0.5);
-        }
-
-        /* SECONDARY BUTTON (Reset) */
-        .reset-btn button {
-            background: transparent !important;
-            border: 1px solid rgba(255,255,255,0.3) !important;
-            color: white !important;
-        }
-
-        /* PAYPAL BUTTON */
         .paypal-btn {
-            display: inline-block;
-            background: #FFC439;
-            color: #000;
-            font-weight: bold;
-            text-decoration: none;
-            padding: 15px 40px;
-            border-radius: 50px;
-            margin-top: 20px;
-            box-shadow: 0 4px 15px rgba(255, 196, 57, 0.4);
-            transition: all 0.3s;
+            background: #FFC439; color: black !important; padding: 12px 30px; 
+            border-radius: 50px; text-decoration: none; font-weight: bold; display: inline-block;
         }
-        .paypal-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(255, 196, 57, 0.6);
-            color: black;
-        }
-
-        /* HIDE STREAMLIT UI */
-        #MainMenu, header, footer {visibility: hidden;}
-        
-        h1 { font-size: 2.5rem !important; margin-bottom: 0 !important; }
-        p { color: #ccc !important; }
+        h1, h3, p { text-align: center; }
+        #MainMenu, footer, header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 4. PROCESSING LOGIC ---
-TARGET_W, TARGET_H = 630, 810
-MAX_FILE_SIZE_KB = 250
+# --- 3. SESSION STATE ---
+if 'step' not in st.session_state: st.session_state.step = 1
+if 'input_image' not in st.session_state: st.session_state.input_image = None
+if 'processed_image' not in st.session_state: st.session_state.processed_image = None
 
-def process_image(pil_img):
-    # Convert to bytes
+# --- 4. PROCESSING LOGIC ---
+def process_photo(pil_img, std):
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
-    
-    # Remove BG
     subject = remove(buf.getvalue(), alpha_matting=True)
     foreground = Image.open(io.BytesIO(subject)).convert("RGBA")
     
-    # White BG
     bg = Image.new("RGBA", foreground.size, "WHITE")
     bg.paste(foreground, (0, 0), foreground)
     rgb_img = bg.convert("RGB")
     
-    # Resize
-    final_img = rgb_img.resize((TARGET_W, TARGET_H), Image.Resampling.LANCZOS)
+    # Auto-Crop Logic
+    opencv_img = np.array(rgb_img)
+    opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    faces = face_cascade.detectMultiScale(cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY), 1.1, 5)
     
-    # Compress
+    if len(faces) > 0:
+        x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+        face_cx, face_cy = x + w//2, y + h//2
+        req_h = int((h * 1.55) / 0.75)
+        req_w = int(req_h * (std['w'] / std['h']))
+        canvas = Image.new("RGB", (rgb_img.width + req_w, rgb_img.height + req_h), "WHITE")
+        canvas.paste(rgb_img, (req_w//2, req_h//2))
+        rgb_img = canvas.crop((face_cx, face_cy - int(req_h*0.6), face_cx + req_w, face_cy + int(req_h*0.4)))
+
+    final = rgb_img.resize((std['w'], std['h']), Image.Resampling.LANCZOS)
+    
     quality = 95
-    out_buf = io.BytesIO()
     while quality > 10:
-        out_buf = io.BytesIO()
-        final_img.save(out_buf, format="JPEG", quality=quality)
-        if out_buf.tell() / 1024 < MAX_FILE_SIZE_KB:
-            break
+        out = io.BytesIO()
+        final.save(out, format="JPEG", quality=quality)
+        if out.tell() / 1024 < std['kb']: break
         quality -= 5
-    out_buf.seek(0)
-    return out_buf
+    out.seek(0)
+    return out, out.tell() / 1024
 
-# --- 5. APP FLOW (PAGINATION) ---
+# --- 5. UI FLOW ---
+st.markdown("<h1>Global Passport Pro AI ✨</h1>", unsafe_allow_html=True)
 
-# HEADER
-st.markdown("<h1 style='text-align: center;'>Passport AI ✨</h1>", unsafe_allow_html=True)
-st.markdown(f"<p style='text-align: center;'>Step {st.session_state.step} of 3</p>", unsafe_allow_html=True)
-
-# PROGRESS BAR
-st.progress(st.session_state.step / 3)
-
-# CONTAINER
-st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-
-# --- STEP 1: UPLOAD ---
 if st.session_state.step == 1:
-    st.markdown("### 📸 Select Your Photo")
+    st.markdown("### 📋 Step 1: Check Standards & Upload")
     
-    tab_up, tab_cam = st.tabs(["Upload File", "Use Camera"])
-    
-    with tab_up:
-        uploaded = st.file_uploader("", type=['jpg','png','jpeg'], label_visibility="collapsed")
-        if uploaded:
-            st.session_state.input_image = Image.open(uploaded)
-            st.session_state.step = 2
-            st.rerun()
+    # Show Standards Table
+    df = pd.DataFrame(PHOTO_STANDARDS).T.reset_index()
+    df = df.rename(columns={"index": "Standard", "mm": "Dim (mm)", "w": "Width", "h": "Height", "kb": "Max KB"})
+    st.table(df[["Standard", "Dim (mm)", "Width", "Height", "Max KB"]])
 
-    with tab_cam:
-        if "cam_active" not in st.session_state: st.session_state.cam_active = False
-        
-        if not st.session_state.cam_active:
-            if st.button("Start Camera"):
-                st.session_state.cam_active = True
-                st.rerun()
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    selected = st.selectbox("Select Target Destination:", list(PHOTO_STANDARDS.keys()))
+    st.session_state.selected_std = selected
+    
+    uploaded = st.file_uploader("Upload or Drag Photo", type=['jpg','png','jpeg'])
+    if uploaded:
+        st.session_state.input_image = Image.open(uploaded)
+        # Validation
+        curr_w, curr_h = st.session_state.input_image.size
+        std = PHOTO_STANDARDS[selected]
+        if curr_w == std['w'] and curr_h == std['h']:
+            st.success("✅ Photo already matches dimensions!")
         else:
-            cam_snap = st.camera_input("Center Face", label_visibility="collapsed")
-            if cam_snap:
-                st.session_state.input_image = Image.open(cam_snap)
-                st.session_state.step = 2
-                st.rerun()
+            st.warning(f"⚠️ Photo is {curr_w}x{curr_h}. Needs to be {std['w']}x{std['h']}.")
+        
+        if st.button("✨ Auto-Fix & Convert"):
+            st.session_state.step = 2; st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- STEP 2: PROCESSING ---
+    # ICAO COMPLIANCE DIAGRAM TRIGGER
+    st.markdown("### 💡 ICAO Compliance Guide")
+    st.write("Ensure your photo follows these geometric rules:")
+    st.markdown("")
+
 elif st.session_state.step == 2:
-    st.markdown("### ⚡ Processing...")
-    
-    # Show thumbnail
-    st.image(st.session_state.input_image, width=150, caption="Original")
-    
-    with st.spinner("Removing background & resizing..."):
-        # Simulate delay for UX (feels more "powerful")
-        time.sleep(1) 
-        result = process_image(st.session_state.input_image)
-        st.session_state.processed_image = result
-        st.session_state.step = 3
-        st.rerun()
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("### ⚡ Step 2: Processing")
+    with st.spinner("Removing background and aligning to international standards..."):
+        time.sleep(1)
+        buf, size = process_photo(st.session_state.input_image, PHOTO_STANDARDS[st.session_state.selected_std])
+        st.session_state.processed_image, st.session_state.final_size = buf, size
+        st.session_state.step = 3; st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- STEP 3: RESULT & DOWNLOAD ---
 elif st.session_state.step == 3:
-    st.markdown("### ✅ Success!")
-    
-    # Show Result
-    st.image(st.session_state.processed_image, caption="Passport Ready (630x810)", width=200)
-    
-    # DOWNLOAD BUTTON
-    st.download_button(
-        label="⬇️ Download Photo",
-        data=st.session_state.processed_image,
-        file_name="passport_photo.jpg",
-        mime="image/jpeg"
-    )
-    
-    # PAYPAL LINK (Prominent)
-    st.markdown("""
-        <br>
-        <p style="font-size: 0.9rem;">Did this save you time?</p>
-        <a href="https://paypal.me/698789" target="_blank" class="paypal-btn">
-            ☕ Buy me a Coffee
-        </a>
-    """, unsafe_allow_html=True)
-    
-    # START OVER
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    if st.button("🔄 Start Over", type="secondary"):
-        reset_app()
-
-st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("### ✅ Step 3: Success!")
+    st.image(st.session_state.processed_image, caption=f"Compliant Result: {st.session_state.final_size:.1f} KB", width=250)
+    st.download_button("⬇️ Download High-Res Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg")
+    st.markdown(f'<br><a href="https://paypal.me/698789" target="_blank" class="paypal-btn">☕ Buy me a Coffee</a>', unsafe_allow_html=True)
+    if st.button("🔄 New Photo"): 
+        st.session_state.step = 1; st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
