@@ -9,9 +9,10 @@ import pandas as pd
 from specs import PHOTO_STANDARDS
 
 # --- 1. PAGE CONFIG ---
-st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="wide")
+# layout="centered" is actually better for mobile than "wide"
+st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="centered")
 
-# --- 2. CSS STYLING ---
+# --- 2. CSS STYLING (Mobile Optimized) ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
@@ -24,42 +25,38 @@ st.markdown("""
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(10px);
             border-radius: 20px;
-            padding: 25px;
+            padding: 20px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             margin-bottom: 20px;
         }
+        /* Mobile-friendly Button Sizing */
         div.stButton > button {
             width: 100%;
-            border-radius: 8px;
+            border-radius: 12px;
             font-weight: bold;
-            padding: 0.6rem 1rem;
+            padding: 0.75rem 1rem;
             margin-top: 10px;
+            min-height: 50px; /* Touch friendly */
         }
+        /* Status Text Colors */
+        .success-text { color: #00ff7f; font-weight: bold; }
+        .fail-text { color: #ff4b4b; font-weight: bold; }
+        
         #MainMenu, footer, header {visibility: hidden;}
         .stFileUploader label, .stCameraInput label { display: none; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. SESSION STATE INITIALIZATION (CRITICAL FIX) ---
-# This block must run before anything else to prevent AttributeErrors
-if 'step' not in st.session_state: 
-    st.session_state.step = 1
-if 'input_image' not in st.session_state: 
-    st.session_state.input_image = None
-if 'processed_image' not in st.session_state: 
-    st.session_state.processed_image = None
-if 'cam_active' not in st.session_state: 
-    st.session_state.cam_active = False  # Fixed: Explicitly initialized
-if 'bg_mode' not in st.session_state: 
-    st.session_state.bg_mode = "Auto-Remove (White BG)"
-if 'custom_specs' not in st.session_state: 
-    st.session_state.custom_specs = {"w": 600, "h": 600, "kb": 250, "mm": "Custom"}
-if 'selected_std' not in st.session_state:
-    st.session_state.selected_std = list(PHOTO_STANDARDS.keys())[0]
-if 'target_quality' not in st.session_state:
-    st.session_state.target_quality = "Standard (~250 KB)"
-if 'final_size' not in st.session_state:
-    st.session_state.final_size = 0
+# --- 3. SESSION STATE INITIALIZATION ---
+if 'step' not in st.session_state: st.session_state.step = 1
+if 'input_image' not in st.session_state: st.session_state.input_image = None
+if 'processed_image' not in st.session_state: st.session_state.processed_image = None
+if 'cam_active' not in st.session_state: st.session_state.cam_active = False
+if 'bg_mode' not in st.session_state: st.session_state.bg_mode = "Auto-Remove (White BG)"
+if 'custom_specs' not in st.session_state: st.session_state.custom_specs = {"w": 600, "h": 600, "kb": 250, "mm": "Custom"}
+if 'selected_std' not in st.session_state: st.session_state.selected_std = "Select a Country..."
+if 'target_quality' not in st.session_state: st.session_state.target_quality = "Standard (~250 KB)"
+if 'final_size' not in st.session_state: st.session_state.final_size = 0
 
 # --- 4. UTILS ---
 def resize_if_huge(img, max_dim=1500):
@@ -99,7 +96,7 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
             fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
             center_x = fx + fw // 2
             
-            # ICAO Logic: Eye line at ~45% from top
+            # ICAO Logic
             eye_line_y = fy + int(fh * 0.45) 
             chin_y = fy + fh
             head_height_est = (chin_y - eye_line_y) * 2.4 
@@ -118,9 +115,7 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
         src_x1, src_y1 = max(0, crop_x1), max(0, crop_y1)
         src_x2 = min(rgb_img.width, crop_x1 + req_img_w)
         src_y2 = min(rgb_img.height, crop_y1 + req_img_h)
-        
-        dst_x = max(0, -crop_x1)
-        dst_y = max(0, -crop_y1)
+        dst_x, dst_y = max(0, -crop_x1), max(0, -crop_y1)
         
         if src_x2 > src_x1 and src_y2 > src_y1:
             region = rgb_img.crop((src_x1, src_y1, src_x2, src_y2))
@@ -146,67 +141,71 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
     except Exception as e:
         return None, str(e)
 
-# --- 6. SIDEBAR CONTROLS ---
-with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
+# --- 6. MAIN UI ---
+st.markdown("<h1 style='text-align: center;'>Global Passport Pro ✨</h1>", unsafe_allow_html=True)
+
+if st.session_state.step == 1:
+    
+    # --- CONFIG CARD (MOVED TO MAIN SCREEN) ---
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("### 1️⃣ Settings")
     
     options = ["Select a Country..."] + list(PHOTO_STANDARDS.keys()) + ["🛠️ Custom / Manual Input"]
     
-    # Handle selection state safely
-    if st.session_state.selected_std in options:
-        idx = options.index(st.session_state.selected_std)
-    else:
-        idx = 0
+    # Handle Session State Index Logic safely
+    try:
+        sel_index = options.index(st.session_state.selected_std)
+    except ValueError:
+        sel_index = 0
         
-    selected_option = st.selectbox("1. Target Standard:", options, index=idx)
-    st.session_state.selected_std = selected_option # Update state
+    selected_option = st.selectbox("Target Standard:", options, index=sel_index)
+    st.session_state.selected_std = selected_option
     
+    # Logic for Custom vs Standard
     target_specs = None
-    
     if selected_option == "Select a Country...":
-        st.warning("👈 Please select a country to start.")
-    
+        st.info("👆 Select a country to enable upload.")
+        
     elif selected_option == "🛠️ Custom / Manual Input":
-        st.markdown("---")
-        c_mm = st.text_input("Dimensions (e.g. 35x45 mm)", value="35x45 mm")
-        c_w = st.number_input("Width (px)", value=600)
-        c_h = st.number_input("Height (px)", value=600)
-        c_kb = st.number_input("Max Size (KB)", value=250)
+        c1, c2, c3 = st.columns(3)
+        with c1: c_w = st.number_input("W (px)", value=600)
+        with c2: c_h = st.number_input("H (px)", value=600)
+        with c3: c_kb = st.number_input("KB Limit", value=250)
+        c_mm = st.text_input("Size label (e.g. 35x45mm)", "Custom Size")
         target_specs = {"w": c_w, "h": c_h, "kb": c_kb, "mm": c_mm}
         
     else:
         target_specs = PHOTO_STANDARDS[selected_option]
-        st.info(f"📏 {target_specs['mm']}\n🖼️ {target_specs['w']}x{target_specs['h']} px\n💾 Max {target_specs['kb']} KB")
+        st.success(f"**{target_specs['mm']}** | {target_specs['w']}x{target_specs['h']} px | Max {target_specs['kb']} KB")
 
-    st.markdown("---")
-    bg_mode = st.radio("2. Background Mode:", ["Auto-Remove (White BG)", "Keep Original (Hair Safe)"], index=0 if st.session_state.bg_mode == "Auto-Remove (White BG)" else 1)
-    
     if target_specs:
         st.session_state.custom_specs = target_specs
-        st.session_state.bg_mode = bg_mode
-
-# --- 7. MAIN INTERFACE ---
-st.markdown("<h1 style='text-align: center;'>Passport AI ✨</h1>", unsafe_allow_html=True)
-
-if st.session_state.step == 1:
+        
+        # Additional Options (Only show if country selected)
+        c_bg, c_qual = st.columns(2)
+        with c_bg:
+            bg_mode = st.selectbox("Background:", ["Auto-Remove (White BG)", "Keep Original (Hair Safe)"], index=0 if st.session_state.bg_mode == "Auto-Remove (White BG)" else 1)
+            st.session_state.bg_mode = bg_mode
+        with c_qual:
+            q_mode = st.selectbox("Quality:", ["Standard (~250 KB)", "Max Quality (Uncompressed)", "Strict Upload (< 100 KB)"])
+            st.session_state.target_quality = q_mode
     
-    if selected_option == "Select a Country...":
-        st.markdown('<div class="glass-card" style="text-align: center; color: #aaa;">', unsafe_allow_html=True)
-        st.markdown("### ⬅️ Start by selecting a country in the sidebar")
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    else:
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- UPLOAD CARD (Conditional) ---
+    if target_specs:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        tab_up, tab_cam = st.tabs(["📤 Upload Photo", "📸 Take Selfie"])
+        st.markdown("### 2️⃣ Capture or Upload")
+        
+        tab_up, tab_cam = st.tabs(["📤 Upload File", "📸 Camera"])
         
         img_buffer = None
         with tab_up:
             uploaded = st.file_uploader("Upload", type=['jpg','png','jpeg'], label_visibility="collapsed")
             if uploaded: img_buffer = uploaded
         with tab_cam:
-            # Safer Camera Toggle Logic
             if not st.session_state.cam_active:
-                if st.button("🔵 Open Camera"): 
+                if st.button("🔵 Start Camera"): 
                     st.session_state.cam_active = True
                     st.rerun()
             else:
@@ -216,6 +215,7 @@ if st.session_state.step == 1:
                     st.session_state.cam_active = False
                     st.rerun()
 
+        # PREVIEW & VALIDATION
         if img_buffer:
             img = Image.open(img_buffer)
             img = ImageOps.exif_transpose(img)
@@ -227,33 +227,34 @@ if st.session_state.step == 1:
             
             is_perfect = (curr_w == req['w'] and curr_h == req['h'] and curr_kb <= req['kb'])
             
-            col_img, col_info = st.columns([1, 1.2])
+            st.markdown("---")
+            col_img, col_info = st.columns([1, 1.5])
             
             with col_img:
-                st.image(img, caption="Original Upload", use_container_width=True)
+                st.image(img, caption="Original", use_container_width=True)
             
             with col_info:
                 if is_perfect:
-                    st.success("✅ Perfect Match!")
+                    st.success("✅ Perfect! No changes needed.")
                 else:
-                    st.error("⚠️ Action Required")
-                    st.markdown(f"**Target:** {req['mm']} | {req['w']}x{req['h']} px")
+                    st.warning("⚠️ Adjustments Needed")
+                    st.markdown(f"**Target:** {req['mm']} ({req['w']}x{req['h']}px)")
                     
                     if curr_w != req['w'] or curr_h != req['h']:
-                        st.markdown(f"- ❌ **Dims:** {curr_w}x{curr_h} px")
+                        st.markdown(f"❌ **Dims:** {curr_w}x{curr_h} px")
                     if curr_kb > req['kb']:
-                        st.markdown(f"- ❌ **Size:** {curr_kb:.0f} KB (Max {req['kb']} KB)")
-                    
-                    st.markdown(f"- ℹ️ **Mode:** {bg_mode}")
+                        st.markdown(f"❌ **Size:** {curr_kb:.0f} KB (Limit {req['kb']})")
                 
+                # FIXED: Action button visible immediately without scrolling
                 if st.button("✨ Auto-Fix & Generate", type="primary"):
                     st.session_state.step = 2; st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
+# --- STEP 2: PROCESSING ---
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    with st.spinner("🤖 AI is aligning face and fixing dimensions..."):
+    with st.spinner("🤖 AI is aligning face and cropping..."):
         time.sleep(0.5)
         req = st.session_state.custom_specs
         buf, size_val = process_photo(st.session_state.input_image, req['w'], req['h'], req['kb'], st.session_state.bg_mode)
@@ -267,22 +268,23 @@ elif st.session_state.step == 2:
             if st.button("Back"): st.session_state.step = 1; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
+# --- STEP 3: RESULT ---
 elif st.session_state.step == 3:
     st.markdown('<div class="glass-card" style="text-align: center;">', unsafe_allow_html=True)
+    st.markdown("### ✅ Ready!")
     
-    col1, col2 = st.columns([1,1])
-    with col1:
-        st.image(st.session_state.processed_image, caption="Result", use_container_width=True)
-    with col2:
-        st.success("✅ Processing Complete")
-        
-        req = st.session_state.custom_specs
-        st.markdown(f"**Dimensions:** {req['mm']}")
-        st.markdown(f"**Resolution:** {req['w']}x{req['h']} px")
-        st.markdown(f"**File Size:** {st.session_state.final_size:.1f} KB")
-        
-        st.download_button("⬇️ Download Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg", type="primary")
-        
-        if st.button("🔄 Process Another"): st.session_state.step = 1; st.rerun()
-
+    st.image(st.session_state.processed_image, caption="Passport Photo", width=250)
+    
+    req = st.session_state.custom_specs
+    st.success(f"Standard: {req['mm']} | {req['w']}x{req['h']} px | {st.session_state.final_size:.1f} KB")
+    
+    st.download_button(
+        label="⬇️ Download Photo",
+        data=st.session_state.processed_image,
+        file_name="passport_photo.jpg",
+        mime="image/jpeg",
+        type="primary"
+    )
+    
+    if st.button("🔄 Process Another"): st.session_state.step = 1; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
