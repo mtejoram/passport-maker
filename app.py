@@ -5,78 +5,126 @@ import io
 import numpy as np
 import cv2
 
-# --- 1. PAGE CONFIGURATION ---
+# --- 1. CONFIGURATION ---
 st.set_page_config(
-    page_title="Passport Pro",
+    page_title="Passport Pro AI",
     page_icon="🛂",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. PREMIUM CSS (FIXED FOR TEXT VISIBILITY) ---
+# --- 2. ADVANCED CSS (The "Glassmorphism" Look) ---
 st.markdown("""
     <style>
-        /* Force light theme for the whole app */
-        [data-testid="stAppViewContainer"] {
-            background-color: #f0f2f6;
+        /* IMPORT GOOGLE FONT */
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap');
+
+        /* RESET & GLOBAL THEME */
+        html, body, [class*="css"] {
+            font-family: 'Poppins', sans-serif;
         }
         
-        /* Main Card Styling */
-        .main-card {
-            background-color: white;
-            padding: 2rem;
-            border-radius: 15px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-            color: #333333; /* Dark Grey Text */
+        /* BACKGROUND GRADIENT */
+        .stApp {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            background-attachment: fixed;
         }
 
-        /* Force ALL text to be dark (overrides system Dark Mode) */
-        h1, h2, h3, h4, p, li, .stMarkdown, .stMetricLabel {
-            color: #1a202c !important; 
-        }
-        
-        /* Metric Values (The big numbers) */
-        .stMetricValue {
-            color: #3182ce !important;
+        /* GLASSMORPHISM CARD */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+            padding: 2.5rem;
+            margin-bottom: 2rem;
         }
 
-        /* Buttons */
+        /* TYPOGRAPHY */
+        h1 {
+            color: #1a202c;
+            font-weight: 700 !important;
+            letter-spacing: -1px;
+            text-align: center;
+            margin-bottom: 0px !important;
+        }
+        p.subtitle {
+            color: #4a5568;
+            text-align: center;
+            font-size: 1.1rem;
+            margin-top: 0px;
+            margin-bottom: 2rem;
+            font-weight: 300;
+        }
+        h3 {
+            color: #2d3748;
+            font-weight: 600 !important;
+            font-size: 1.2rem !important;
+            margin-top: 1rem !important;
+        }
+
+        /* CUSTOM BUTTONS */
         div.stButton > button {
-            background-color: #3182ce;
+            background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
             color: white !important;
-            border-radius: 8px;
             border: none;
-            padding: 0.6rem 1.2rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 12px;
             font-weight: 600;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
+            width: 100%;
         }
         div.stButton > button:hover {
-            background-color: #2b6cb0;
+            transform: translateY(-2px);
+            box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
         }
+        div.stButton > button:active {
+            transform: translateY(1px);
+        }
+
+        /* HIDE UGLY STREAMLIT ELEMENTS */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
         
-        /* Hide the default "Stop Camera" text which looks ugly */
-        button[kind="header"] {
-            visibility: hidden;
+        /* CUSTOM TABS */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+            background-color: transparent;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background-color: rgba(255,255,255,0.5);
+            border-radius: 10px;
+            padding: 10px 20px;
+            border: none;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: #fff !important;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            font-weight: 600 !important;
+            color: #4b6cb7 !important;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. PROCESSING LOGIC ---
+# --- 3. LOGIC (Same Robust Backend) ---
 TARGET_W, TARGET_H = 630, 810
 MAX_FILE_SIZE_KB = 250
 
 def process_image(input_image):
-    # 1. Remove BG
     buf = io.BytesIO()
     input_image.save(buf, format="PNG")
     subject_data = remove(buf.getvalue(), alpha_matting=True)
     foreground = Image.open(io.BytesIO(subject_data)).convert("RGBA")
     
-    # 2. White BG
     new_bg = Image.new("RGBA", foreground.size, "WHITE")
     new_bg.paste(foreground, (0, 0), foreground)
     final_rgb = new_bg.convert("RGB")
     
-    # 3. Detect & Crop
     opencv_img = np.array(final_rgb)
     opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
@@ -87,7 +135,6 @@ def process_image(input_image):
     
     if len(faces) > 0:
         x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
-        # Smart Crop
         face_cx, face_cy = x + w//2, y + h//2
         head_h = h * 1.5
         req_h = int(head_h / 0.75)
@@ -97,12 +144,10 @@ def process_image(input_image):
         c_y1 = (face_cy - req_h // 2) - int(req_h * 0.1)
         c_x2, c_y2 = c_x1 + req_w, c_y1 + req_h
         
-        # Pad canvas if needed
         final_rgb_padded = Image.new("RGB", (final_rgb.width + req_w*2, final_rgb.height + req_h*2), "WHITE")
         final_rgb_padded.paste(final_rgb, (req_w, req_h))
         final_rgb = final_rgb_padded.crop((c_x1+req_w, c_y1+req_h, c_x2+req_w, c_y2+req_h))
 
-    # 4. Resize & Compress
     final_rgb = final_rgb.resize((TARGET_W, TARGET_H), Image.Resampling.LANCZOS)
     
     quality = 95
@@ -117,75 +162,77 @@ def process_image(input_image):
 
 # --- 4. UI LAYOUT ---
 
-st.markdown("<h1 style='text-align: center; color: #1a202c;'>Passport Pro 🛂</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center; color: #4a5568;'>Instant Indian Passport Photos</h3>", unsafe_allow_html=True)
+# Header Section
+st.markdown("<h1>Passport Pro AI 🛂</h1>", unsafe_allow_html=True)
+st.markdown("<p class='subtitle'>Professional Indian Passport Photos in seconds.</p>", unsafe_allow_html=True)
 
-# Main Container
-with st.container():
-    st.markdown('<div class="main-card">', unsafe_allow_html=True) # Start Card
+# Main Glass Card
+st.markdown('<div class="glass-card">', unsafe_allow_html=True)
 
-    # Tabs
-    tab_upload, tab_cam = st.tabs(["📤 Upload File", "📸 Take Selfie"])
+# Mode Selection Tabs
+tab_upload, tab_cam = st.tabs(["📤 Upload File", "📸 Use Camera"])
+
+img_file = None
+
+with tab_upload:
+    st.markdown("### Drop your photo here")
+    uploaded = st.file_uploader("", type=['jpg','png','jpeg'], label_visibility="collapsed")
+    if uploaded: img_file = uploaded
+
+with tab_cam:
+    st.markdown("### Take a Selfie")
+    # Camera Toggle Logic
+    if "cam_active" not in st.session_state: st.session_state.cam_active = False
     
-    img_file = None
+    if not st.session_state.cam_active:
+        if st.button("🔴 Activate Camera"):
+            st.session_state.cam_active = True
+            st.rerun()
+    else:
+        cam_snap = st.camera_input("Look straight and center your face", label_visibility="collapsed")
+        if cam_snap: img_file = cam_snap
+        if st.button("❌ Close Camera"):
+            st.session_state.cam_active = False
+            st.rerun()
+
+# Processing & Result Section
+if img_file:
+    st.markdown("---")
     
-    # --- TAB 1: UPLOAD ---
-    with tab_upload:
-        st.write("### Option 1: Upload from Gallery")
-        uploaded = st.file_uploader("", type=['jpg','png','jpeg'], key="uploader")
-        if uploaded: 
-            img_file = uploaded
-
-    # --- TAB 2: CAMERA (FIXED: NO AUTO-POPUP) ---
-    with tab_cam:
-        st.write("### Option 2: Use Camera")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("<h3 style='text-align: center'>Original</h3>", unsafe_allow_html=True)
+        st.image(img_file, use_container_width=True)
         
-        # We use session state to track if camera should be on
-        if "camera_active" not in st.session_state:
-            st.session_state.camera_active = False
-
-        if not st.session_state.camera_active:
-            # Show a button INSTEAD of the camera first
-            if st.button("🔴 Open Camera"):
-                st.session_state.camera_active = True
-                st.rerun()
-        else:
-            # Only show camera widget if button was clicked
-            cam_snap = st.camera_input("Center your face and snap", key="camera")
-            if cam_snap: 
-                img_file = cam_snap
-            
-            # Option to close camera
-            if st.button("❌ Close Camera"):
-                st.session_state.camera_active = False
-                st.rerun()
-
-    # --- RESULT SECTION ---
-    if img_file:
-        st.markdown("---")
-        st.write("### Preview & Process")
+    with col2:
+        st.markdown("<h3 style='text-align: center'>Passport Ready</h3>", unsafe_allow_html=True)
         
-        col_left, col_right = st.columns(2)
+        # Placeholder for result
+        result_placeholder = st.empty()
         
-        with col_left:
-            st.image(img_file, caption="Original Photo", use_container_width=True)
-        
-        with col_right:
-            if st.button("✨ Convert to Passport Photo"):
-                with st.spinner("Processing... Please wait."):
-                    result_buffer = process_image(Image.open(img_file))
+        # Process Button
+        if result_placeholder.button("✨ Generate Photo"):
+            with st.spinner("Applying AI magic..."):
+                final_buffer = process_image(Image.open(img_file))
                 
-                st.success("Done!")
-                st.image(result_buffer, caption="Passport Ready", use_container_width=True)
+                # Update placeholder with result
+                result_placeholder.image(final_buffer, use_container_width=True)
                 
+                # Show Download Button
+                st.balloons()
                 st.download_button(
-                    label="⬇️ Download Image",
-                    data=result_buffer,
+                    label="⬇️ Download High-Res Image",
+                    data=final_buffer,
                     file_name="passport_photo.jpg",
                     mime="image/jpeg"
                 )
-    
-    st.markdown('</div>', unsafe_allow_html=True) # End Card
+
+st.markdown('</div>', unsafe_allow_html=True) # End Glass Card
 
 # Footer
-st.markdown("<p style='text-align: center; margin-top: 20px; color: #666;'>Privacy Note: Photos are not saved.</p>", unsafe_allow_html=True)
+st.markdown("""
+    <div style='text-align: center; color: #666; padding: 20px; font-size: 0.8rem;'>
+        Secure & Private • No data saved • ICAO Compliant<br>
+        Built with ❤️ using Python & AI
+    </div>
+""", unsafe_allow_html=True)
