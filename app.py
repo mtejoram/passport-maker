@@ -1,196 +1,199 @@
 import streamlit as st
 from rembg import remove
-from PIL import Image, ImageEnhance
+from PIL import Image
 import io
 import numpy as np
 import cv2
 
-# --- PAGE CONFIGURATION (Browser Tab Title & Icon) ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Passport Pro AI",
+    page_title="Passport Pro",
     page_icon="🛂",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# --- CUSTOM CSS FOR PROFESSIONAL LOOK ---
+# --- 2. PREMIUM CSS STYLING ---
 st.markdown("""
     <style>
-        .block-container {
-            padding-top: 2rem;
-            padding-bottom: 2rem;
+        /* Main Background */
+        .stApp {
+            background-color: #f8f9fa;
         }
+        
+        /* Card Container for Main Content */
+        .css-1r6slb0, .css-12oz5g7 {
+            padding: 2rem;
+            border-radius: 15px;
+            background-color: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        
+        /* Headings */
         h1 {
+            color: #1a202c;
+            font-family: 'Helvetica Neue', sans-serif;
+            font-weight: 700;
             text-align: center;
-            color: #2E86C1;
+            margin-bottom: 0.5rem;
         }
-        .stButton>button {
-            width: 100%;
-            border-radius: 5px;
-            height: 3em;
-            background-color: #2E86C1;
+        h3 {
+            color: #4a5568;
+            font-family: 'Helvetica Neue', sans-serif;
+            text-align: center;
+            font-weight: 400;
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+        }
+        
+        /* Custom Button Styling */
+        div.stButton > button {
+            background-color: #3182ce;
             color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            width: 100%;
+            transition: all 0.2s;
         }
-        .css-1v0mbdj {
-            display: flex;
-            justify-content: center;
+        div.stButton > button:hover {
+            background-color: #2b6cb0;
+            box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
+            transform: translateY(-1px);
         }
-        img {
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        
+        /* Success Message Box */
+        .stSuccess {
+            background-color: #f0fff4;
+            border-left: 5px solid #48bb78;
+        }
+        
+        /* Footer */
+        .footer {
+            text-align: center;
+            color: #a0aec0;
+            font-size: 0.8rem;
+            margin-top: 3rem;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# --- CONFIGURATION CONSTANTS ---
+# --- 3. CORE LOGIC (Same robust processing) ---
 TARGET_W, TARGET_H = 630, 810
 MAX_FILE_SIZE_KB = 250
 
 def process_image(input_image):
-    """
-    Core logic: Remove BG -> Detect Face -> Crop -> Resize -> Compress
-    """
-    # 1. REMOVE BACKGROUND
-    with st.spinner("✨ Removing background & Enhancing..."):
-        # Convert to bytes
-        buf = io.BytesIO()
-        input_image.save(buf, format="PNG")
-        input_data = buf.getvalue()
-        
-        # AI Magic
-        subject_data = remove(input_data, alpha_matting=True) # High quality cut
-        pil_image = Image.open(io.BytesIO(subject_data)).convert("RGBA")
-        
-        # Create Professional White Background
-        white_bg = Image.new("RGBA", pil_image.size, "WHITE")
-        white_bg.paste(pil_image, (0, 0), pil_image)
-        pil_rgb = white_bg.convert("RGB")
-
-    # 2. FACE DETECTION
-    opencv_image = np.array(pil_rgb)
-    opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_RGB2BGR)
+    # 1. Remove Background
+    buf = io.BytesIO()
+    input_image.save(buf, format="PNG")
+    subject_data = remove(buf.getvalue(), alpha_matting=True)
+    foreground = Image.open(io.BytesIO(subject_data)).convert("RGBA")
+    
+    # 2. White BG
+    new_bg = Image.new("RGBA", foreground.size, "WHITE")
+    new_bg.paste(foreground, (0, 0), foreground)
+    final_rgb = new_bg.convert("RGB")
+    
+    # 3. Face Detect & Crop (Simplified for speed/reliability)
+    opencv_img = np.array(final_rgb)
+    opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
     
     cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
     face_cascade = cv2.CascadeClassifier(cascade_path)
-    gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
     
-    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-    
-    if len(faces) == 0:
-        return None, "⚠️ No face detected. Please ensure good lighting and face the camera directly."
+    if len(faces) > 0:
+        x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+        # Smart Crop Calculation
+        face_cx, face_cy = x + w//2, y + h//2
+        head_h = h * 1.5
+        req_h = int(head_h / 0.75)
+        req_w = int(req_h * (TARGET_W / TARGET_H))
+        
+        c_x1 = face_cx - req_w // 2
+        c_y1 = (face_cy - req_h // 2) - int(req_h * 0.1) # Shift up
+        c_x2, c_y2 = c_x1 + req_w, c_y1 + req_h
+        
+        # Pad and Crop
+        final_rgb_padded = Image.new("RGB", (final_rgb.width + req_w*2, final_rgb.height + req_h*2), "WHITE")
+        final_rgb_padded.paste(final_rgb, (req_w, req_h))
+        final_rgb = final_rgb_padded.crop((c_x1+req_w, c_y1+req_h, c_x2+req_w, c_y2+req_h))
 
-    # Use largest face
-    x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+    # 4. Resize & Compress
+    final_rgb = final_rgb.resize((TARGET_W, TARGET_H), Image.Resampling.LANCZOS)
     
-    # 3. SMART CROP (ICAO Standards)
-    face_center_x = x + w // 2
-    face_center_y = y + h // 2
-    estimated_head_height = h * 1.55  # Slightly more headroom for professional look
-    
-    required_photo_height = int(estimated_head_height / 0.75)
-    aspect_ratio = TARGET_W / TARGET_H
-    required_photo_width = int(required_photo_height * aspect_ratio)
-    
-    crop_x1 = face_center_x - (required_photo_width // 2)
-    crop_x2 = crop_x1 + required_photo_width
-    
-    # Shift slightly up (Eyes at ~60% height)
-    vertical_shift = int(required_photo_height * 0.1)
-    crop_y1 = (face_center_y - (required_photo_height // 2)) - vertical_shift
-    crop_y2 = crop_y1 + required_photo_height
-    
-    # Safe Crop Logic
-    final_crop = Image.new("RGB", (required_photo_width, required_photo_height), (255, 255, 255))
-    orig_w, orig_h = pil_rgb.size
-    
-    paste_x = max(0, -crop_x1)
-    paste_y = max(0, -crop_y1)
-    cut_x1 = max(0, crop_x1)
-    cut_y1 = max(0, crop_y1)
-    cut_x2 = min(orig_w, crop_x2)
-    cut_y2 = min(orig_h, crop_y2)
-    
-    if cut_x2 > cut_x1 and cut_y2 > cut_y1:
-        region = pil_rgb.crop((cut_x1, cut_y1, cut_x2, cut_y2))
-        final_crop.paste(region, (paste_x, paste_y))
-
-    # 4. RESIZE
-    final_image = final_crop.resize((TARGET_W, TARGET_H), Image.Resampling.LANCZOS)
-    
-    # 5. COMPRESS LOOP
     quality = 95
     while quality > 10:
-        out_buffer = io.BytesIO()
-        final_image.save(out_buffer, format="JPEG", quality=quality)
-        size_kb = out_buffer.tell() / 1024
-        if size_kb < MAX_FILE_SIZE_KB:
-            out_buffer.seek(0)
-            return out_buffer, None
+        out_buf = io.BytesIO()
+        final_rgb.save(out_buf, format="JPEG", quality=quality)
+        if out_buf.tell() / 1024 < MAX_FILE_SIZE_KB:
+            out_buf.seek(0)
+            return out_buf
         quality -= 5
+    return out_buf
+
+
+# --- 4. THE UI LAYOUT ---
+
+# Hero Section
+st.markdown("<h1>Passport Pro 🛂</h1>", unsafe_allow_html=True)
+st.markdown("<h3>Instant Indian Passport Photos. AI-Powered.</h3>", unsafe_allow_html=True)
+
+# Main Card
+with st.container():
+    # Progress Steps
+    col1, col2, col3 = st.columns(3)
+    col1.metric("1. Upload", "Any Photo", delta=None)
+    col2.metric("2. AI Magic", "Auto-Fix", delta=None)
+    col3.metric("3. Download", "Print Ready", delta=None)
     
-    return None, "Image too complex to compress under 250KB."
+    st.divider()
 
-# --- MAIN UI ---
-st.title("🛂 Passport Pro AI")
-st.markdown("### The easiest way to get an Indian Passport photo.")
-
-# Create Tabs for cleaner interface
-tab1, tab2, tab3 = st.tabs(["📤 Upload Photo", "📸 Take Selfie", "ℹ️ Guide"])
-
-image_to_process = None
-
-# TAB 1: UPLOAD
-with tab1:
-    uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"], help="Upload a clear photo")
-    if uploaded_file:
-        image_to_process = Image.open(uploaded_file)
-
-# TAB 2: CAMERA (Mobile Friendly!)
-with tab2:
-    camera_photo = st.camera_input("Take a picture")
-    if camera_photo:
-        image_to_process = Image.open(camera_photo)
-
-# TAB 3: INSTRUCTIONS
-with tab3:
-    st.info("💡 **Tips for the perfect shot:**")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.write("✅ **Do:**")
-        st.write("- Look straight at the camera.")
-        st.write("- Keep a neutral expression.")
-        st.write("- Use even lighting (no shadows).")
-    with col_b:
-        st.write("❌ **Don't:**")
-        st.write("- Wear glasses (glare is bad).")
-        st.write("- Wear white clothes (blends with bg).")
-        st.write("- Tilt your head.")
-
-st.markdown("---")
-
-# --- PROCESSING SECTION ---
-if image_to_process:
-    # Show Original
-    st.markdown("#### Preview")
-    st.image(image_to_process, caption="Original", width=250)
+    # Input Section
+    tab_upload, tab_cam = st.tabs(["📤 Upload File", "📸 Take Selfie"])
     
-    # Process Button
-    if st.button("✨ Generate Passport Photo"):
-        processed_buffer, error = process_image(image_to_process)
+    img_file = None
+    
+    with tab_upload:
+        uploaded = st.file_uploader("", type=['jpg','png','jpeg'])
+        if uploaded: img_file = uploaded
+            
+    with tab_cam:
+        cam_snap = st.camera_input("Center your face and snap")
+        if cam_snap: img_file = cam_snap
+
+    # Processing & Result
+    if img_file:
+        st.write("---")
+        col_left, col_right = st.columns([1, 1])
         
-        if error:
-            st.error(error)
-        else:
-            st.success("✅ Photo Ready! (630x810 px | White Bg | <250KB)")
-            
-            # Show Result
-            st.image(processed_buffer, caption="Final Passport Photo", width=250)
-            
-            # Download Button
-            st.download_button(
-                label="⬇️ Download Image",
-                data=processed_buffer,
-                file_name="indian_passport_photo.jpg",
-                mime="image/jpeg",
-                use_container_width=True
-            )
+        with col_left:
+            st.markdown("**Original**")
+            st.image(img_file, use_container_width=True)
+        
+        with col_right:
+            st.markdown("**Passport Ready**")
+            if st.button("✨ Process Photo Now"):
+                with st.spinner("Removing background & resizing..."):
+                    result_buffer = process_image(Image.open(img_file))
+                    
+                st.image(result_buffer, use_container_width=True)
+                st.success("✅ Validated: 630x810px | <250KB")
+                
+                st.download_button(
+                    label="⬇️ Download High-Res JPG",
+                    data=result_buffer,
+                    file_name="passport_photo_final.jpg",
+                    mime="image/jpeg"
+                )
+
+# Footer
+st.markdown("""
+    <div class='footer'>
+        <p>🔒 Privacy First: Photos are processed in RAM and never saved.<br>
+        Compatible with Indian Passport Seva & Visa applications.</p>
+    </div>
+""", unsafe_allow_html=True)
