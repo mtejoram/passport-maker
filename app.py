@@ -9,45 +9,96 @@ import pandas as pd
 from specs import PHOTO_STANDARDS
 
 # --- 1. PAGE CONFIG ---
-# layout="centered" is actually better for mobile than "wide"
 st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="centered")
 
-# --- 2. CSS STYLING (Mobile Optimized) ---
+# --- 2. HIGH-CONTRAST CSS ---
 st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
+        
+        /* 1. Global App Background */
         .stApp { 
-            background: linear-gradient(-45deg, #0f0c29, #1a1a2e, #16213e); 
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
             color: white; 
             font-family: 'Outfit', sans-serif;
         }
+
+        /* 2. Glass Cards (Containers) */
         .glass-card {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(20, 20, 35, 0.6); /* Darker, more opaque background */
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
             margin-bottom: 20px;
         }
-        /* Mobile-friendly Button Sizing */
-        div.stButton > button {
-            width: 100%;
-            border-radius: 12px;
-            font-weight: bold;
-            padding: 0.75rem 1rem;
-            margin-top: 10px;
-            min-height: 50px; /* Touch friendly */
+
+        /* 3. INPUT FIELDS (The Fix for Visibility) */
+        /* Forces text boxes to have a dark background and white text */
+        .stTextInput input, .stNumberInput input {
+            background-color: rgba(255, 255, 255, 0.1) !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            border-radius: 8px;
         }
-        /* Status Text Colors */
-        .success-text { color: #00ff7f; font-weight: bold; }
-        .fail-text { color: #ff4b4b; font-weight: bold; }
         
+        /* 4. DROPDOWNS & SELECTBOXES */
+        div[data-baseweb="select"] > div {
+            background-color: rgba(255, 255, 255, 0.1) !important;
+            color: white !important;
+            border-color: rgba(255, 255, 255, 0.2) !important;
+        }
+        
+        /* Dropdown options text color */
+        div[role="listbox"] ul {
+            background-color: #24243e !important;
+        }
+
+        /* 5. BUTTONS (High Contrast) */
+        div.stButton > button {
+            background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
+            color: white;
+            border: none;
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            font-weight: 600;
+            width: 100%;
+            transition: transform 0.1s;
+        }
+        div.stButton > button:active {
+            transform: scale(0.98);
+        }
+        
+        /* Primary Action Button (Green/Blue) */
+        button[kind="primary"] {
+            background: linear-gradient(90deg, #00b09b, #96c93d) !important;
+            color: black !important;
+            border: none;
+        }
+
+        /* 6. UPLOAD BOX */
+        .stFileUploader {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 10px;
+            border: 1px dashed rgba(255, 255, 255, 0.3);
+        }
+
+        /* Hide Default Streamlit Elements */
         #MainMenu, footer, header {visibility: hidden;}
         .stFileUploader label, .stCameraInput label { display: none; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. SESSION STATE INITIALIZATION ---
+# --- 3. CACHED RESOURCES (PERFORMANCE) ---
+@st.cache_resource(show_spinner=False)
+def load_ai_models():
+    """Load heavy face detection models once."""
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    return face_cascade
+
+# --- 4. SESSION STATE ---
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'input_image' not in st.session_state: st.session_state.input_image = None
 if 'processed_image' not in st.session_state: st.session_state.processed_image = None
@@ -58,7 +109,7 @@ if 'selected_std' not in st.session_state: st.session_state.selected_std = "Sele
 if 'target_quality' not in st.session_state: st.session_state.target_quality = "Standard (~250 KB)"
 if 'final_size' not in st.session_state: st.session_state.final_size = 0
 
-# --- 4. UTILS ---
+# --- 5. UTILS ---
 def resize_if_huge(img, max_dim=1500):
     w, h = img.size
     if w > max_dim or h > max_dim:
@@ -66,9 +117,10 @@ def resize_if_huge(img, max_dim=1500):
         return img.resize((int(w*ratio), int(h*ratio)), Image.Resampling.LANCZOS)
     return img
 
-# --- 5. ICAO PROCESSING ENGINE ---
+# --- 6. ICAO PROCESSING ENGINE ---
 def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
     try:
+        face_cascade = load_ai_models() # Use cached model
         work_img = resize_if_huge(pil_img)
 
         # 1. Background Handling
@@ -88,8 +140,6 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
         # 2. Face Detection
         cv_img = cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-        
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         faces = face_cascade.detectMultiScale(gray, 1.1, 5)
         
         if len(faces) > 0:
@@ -123,9 +173,10 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
         
         final_img = canvas
 
-        # 3. Final Resize & Compress
+        # 3. Final Resize
         final_output = final_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
         
+        # 4. Smart Compress
         quality = 100
         while quality > 10:
             out = io.BytesIO()
@@ -141,37 +192,36 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
     except Exception as e:
         return None, str(e)
 
-# --- 6. MAIN UI ---
-st.markdown("<h1 style='text-align: center;'>Global Passport Pro ✨</h1>", unsafe_allow_html=True)
+# --- 7. MAIN UI ---
+st.markdown("<h1 style='text-align: center; margin-bottom: 20px;'>Passport AI ✨</h1>", unsafe_allow_html=True)
 
 if st.session_state.step == 1:
     
-    # --- CONFIG CARD (MOVED TO MAIN SCREEN) ---
+    # --- CONFIG CARD ---
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 1️⃣ Settings")
     
     options = ["Select a Country..."] + list(PHOTO_STANDARDS.keys()) + ["🛠️ Custom / Manual Input"]
     
-    # Handle Session State Index Logic safely
+    # Selection Handler
     try:
-        sel_index = options.index(st.session_state.selected_std)
+        idx = options.index(st.session_state.selected_std)
     except ValueError:
-        sel_index = 0
-        
-    selected_option = st.selectbox("Target Standard:", options, index=sel_index)
+        idx = 0
+    selected_option = st.selectbox("Target Standard:", options, index=idx)
     st.session_state.selected_std = selected_option
     
-    # Logic for Custom vs Standard
     target_specs = None
+    
     if selected_option == "Select a Country...":
-        st.info("👆 Select a country to enable upload.")
+        st.info("👆 Please select a country to start.")
         
     elif selected_option == "🛠️ Custom / Manual Input":
         c1, c2, c3 = st.columns(3)
         with c1: c_w = st.number_input("W (px)", value=600)
         with c2: c_h = st.number_input("H (px)", value=600)
         with c3: c_kb = st.number_input("KB Limit", value=250)
-        c_mm = st.text_input("Size label (e.g. 35x45mm)", "Custom Size")
+        c_mm = st.text_input("Size Label (e.g. 35x45mm)", "Custom")
         target_specs = {"w": c_w, "h": c_h, "kb": c_kb, "mm": c_mm}
         
     else:
@@ -181,7 +231,6 @@ if st.session_state.step == 1:
     if target_specs:
         st.session_state.custom_specs = target_specs
         
-        # Additional Options (Only show if country selected)
         c_bg, c_qual = st.columns(2)
         with c_bg:
             bg_mode = st.selectbox("Background:", ["Auto-Remove (White BG)", "Keep Original (Hair Safe)"], index=0 if st.session_state.bg_mode == "Auto-Remove (White BG)" else 1)
@@ -192,7 +241,7 @@ if st.session_state.step == 1:
     
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- UPLOAD CARD (Conditional) ---
+    # --- UPLOAD CARD ---
     if target_specs:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.markdown("### 2️⃣ Capture or Upload")
@@ -215,7 +264,7 @@ if st.session_state.step == 1:
                     st.session_state.cam_active = False
                     st.rerun()
 
-        # PREVIEW & VALIDATION
+        # PREVIEW
         if img_buffer:
             img = Image.open(img_buffer)
             img = ImageOps.exif_transpose(img)
@@ -238,14 +287,13 @@ if st.session_state.step == 1:
                     st.success("✅ Perfect! No changes needed.")
                 else:
                     st.warning("⚠️ Adjustments Needed")
-                    st.markdown(f"**Target:** {req['mm']} ({req['w']}x{req['h']}px)")
+                    st.caption(f"Target: {req['mm']} ({req['w']}x{req['h']}px)")
                     
                     if curr_w != req['w'] or curr_h != req['h']:
                         st.markdown(f"❌ **Dims:** {curr_w}x{curr_h} px")
                     if curr_kb > req['kb']:
-                        st.markdown(f"❌ **Size:** {curr_kb:.0f} KB (Limit {req['kb']})")
+                        st.markdown(f"❌ **Size:** {curr_kb:.0f} KB")
                 
-                # FIXED: Action button visible immediately without scrolling
                 if st.button("✨ Auto-Fix & Generate", type="primary"):
                     st.session_state.step = 2; st.rerun()
 
@@ -273,10 +321,10 @@ elif st.session_state.step == 3:
     st.markdown('<div class="glass-card" style="text-align: center;">', unsafe_allow_html=True)
     st.markdown("### ✅ Ready!")
     
-    st.image(st.session_state.processed_image, caption="Passport Photo", width=250)
+    st.image(st.session_state.processed_image, width=250)
     
     req = st.session_state.custom_specs
-    st.success(f"Standard: {req['mm']} | {req['w']}x{req['h']} px | {st.session_state.final_size:.1f} KB")
+    st.success(f"{req['mm']} | {req['w']}x{req['h']} px | {st.session_state.final_size:.1f} KB")
     
     st.download_button(
         label="⬇️ Download Photo",
