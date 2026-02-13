@@ -11,7 +11,7 @@ from specs import PHOTO_STANDARDS
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="wide")
 
-# --- 2. CSS STYLING ---
+# --- 2. CSS STYLING (Clean & Professional) ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
@@ -28,19 +28,15 @@ st.markdown("""
             border: 1px solid rgba(255, 255, 255, 0.1);
             margin-bottom: 20px;
         }
-        .sidebar-text { font-size: 0.85rem; color: #e0e0e0; }
-        .success-box { border-left: 5px solid #00ff7f; background: rgba(0, 255, 127, 0.1); padding: 15px; border-radius: 5px; }
-        .fail-box { border-left: 5px solid #ff4b4b; background: rgba(255, 75, 75, 0.1); padding: 15px; border-radius: 5px; }
+        .success-text { color: #00ff7f; font-weight: bold; }
+        .fail-text { color: #ff4b4b; font-weight: bold; }
         
         div.stButton > button {
             width: 100%;
             border-radius: 8px;
             font-weight: bold;
-            padding: 0.5rem 1rem;
-        }
-        .paypal-btn {
-            background: #FFC439; color: black !important; padding: 12px 30px; 
-            border-radius: 50px; text-decoration: none; font-weight: bold; display: inline-block;
+            padding: 0.6rem 1rem;
+            margin-top: 10px;
         }
         #MainMenu, footer, header {visibility: hidden;}
         .stFileUploader label, .stCameraInput label { display: none; }
@@ -51,12 +47,10 @@ st.markdown("""
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'input_image' not in st.session_state: st.session_state.input_image = None
 if 'processed_image' not in st.session_state: st.session_state.processed_image = None
-if 'file_size_kb' not in st.session_state: st.session_state.file_size_kb = 0
 if 'cam_active' not in st.session_state: st.session_state.cam_active = False
-if 'validation_result' not in st.session_state: st.session_state.validation_result = None
 if 'bg_mode' not in st.session_state: st.session_state.bg_mode = "Auto-Remove (White BG)"
 
-# --- 4. SAFETY UTILS ---
+# --- 4. UTILS ---
 def resize_if_huge(img, max_dim=1500):
     w, h = img.size
     if w > max_dim or h > max_dim:
@@ -64,168 +58,138 @@ def resize_if_huge(img, max_dim=1500):
         return img.resize((int(w*ratio), int(h*ratio)), Image.Resampling.LANCZOS)
     return img
 
-# --- 5. VALIDATION ENGINE ---
-def analyze_image(pil_img, size_kb, std_key):
-    std = PHOTO_STANDARDS[std_key]
-    w, h = pil_img.size
-    
-    dim_check = (w == std['w'] and h == std['h'])
-    size_check = (size_kb <= std['kb'])
-    
-    opencv_img = np.array(pil_img.convert("RGB"))
-    opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
-    
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
-    
-    icao_check = False
-    face_msg = "No Face Detected"
-    
-    if len(faces) > 0:
-        _, _, _, fh = max(faces, key=lambda b: b[2] * b[3])
-        face_ratio = (fh / h) * 100
-        if 60 <= face_ratio <= 85:
-            icao_check = True
-            face_msg = f"Good Head Size ({face_ratio:.1f}%)"
-        else:
-            face_msg = f"Head Size ({face_ratio:.1f}%)"
-    
-    return {
-        "is_compliant": dim_check and size_check and icao_check,
-        "dim_ok": dim_check,
-        "size_ok": size_check,
-        "icao_ok": icao_check,
-        "face_msg": face_msg,
-        "current_w": w, "current_h": h, "current_kb": size_kb
-    }
-
-# --- 6. PROCESSING LOGIC ---
-@st.cache_data(show_spinner=False)
-def process_photo(pil_img, std, quality_mode, bg_choice):
+# --- 5. ICAO PROCESSING ENGINE ---
+def process_photo(pil_img, std, bg_choice):
     try:
         # 0. Safety Resize
         work_img = resize_if_huge(pil_img)
 
-        # 1. Determine Mask (Strictly for detection if keeping BG)
+        # 1. Background Handling
         if bg_choice == "Auto-Remove (White BG)":
             buf = io.BytesIO()
             work_img.save(buf, format="PNG")
-            subject_mask = remove(buf.getvalue(), only_mask=True, alpha_matting=True)
+            # Alpha matting for hair detail
+            subject_mask = remove(buf.getvalue(), only_mask=True, alpha_matting=True, alpha_matting_foreground_threshold=240)
             mask_img = Image.open(io.BytesIO(subject_mask)).convert("L")
             
             foreground = work_img.convert("RGBA")
             bg = Image.new("RGBA", foreground.size, "WHITE")
             final_composite = Image.composite(foreground, bg, mask_img)
             rgb_img = final_composite.convert("RGB")
-            
-            # Use mask for cropping
-            mask_np = np.array(mask_img)
-            
         else:
-            # "Keep Original" - BYPASS REMBG ENTIRELY FOR PIXELS
-            # We only use face detection for cropping coordinates
+            # Keep Original: Use original pixels, but we still need detection
             rgb_img = work_img.convert("RGB")
-            # Create a dummy full mask so we rely 100% on Face Detect
-            mask_np = np.ones((rgb_img.height, rgb_img.width), dtype=np.uint8) * 255
 
-        # 2. Geometry Calculation
-        # Find face using OpenCV
+        # 2. ICAO Face Detection & Cropping
         cv_img = cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-        faces = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml').detectMultiScale(gray, 1.1, 5)
+        
+        # Use High-Precision Haarcascade
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+        
+        faces = face_cascade.detectMultiScale(gray, 1.1, 5)
         
         if len(faces) > 0:
-            x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
-            cx = x + w // 2
-            chin_y = y + h
-            # Estimate top of head (hair) based on face box
-            # Usually top of hair is ~0.5 to 0.8 face heights above the face box top
-            top_y = max(0, y - int(h * 0.6))
-        else:
-            # Fallback center crop
-            cx = rgb_img.width // 2
-            top_y = 0
-            chin_y = rgb_img.height
-
-        head_h = chin_y - top_y
-        if head_h < 1: head_h = rgb_img.height // 2
+            # Get largest face
+            fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
             
-        req_h = int(head_h / 0.75) 
-        req_w = int(req_h * (std['w'] / std['h']))
+            # --- STRICT ICAO LOGIC ---
+            # 1. Center Line: Middle of the face
+            center_x = fx + fw // 2
+            
+            # 2. Eye Line Estimate: Roughly 45% down from the top of the face box
+            eye_line_y = fy + int(fh * 0.45)
+            
+            # 3. Chin Estimate: Bottom of face box
+            chin_y = fy + fh
+            
+            # 4. Calculate Required Height based on Head Size
+            # ICAO: Head (Crown to Chin) must be 70-80% of photo.
+            # We estimate Crown is roughly 1.6x the eye-to-chin distance above chin.
+            eye_to_chin = chin_y - eye_line_y
+            head_height_est = eye_to_chin * 2.2 # Approximation of full head
+            
+            # Target: Head should be 75% (0.75) of image height
+            req_img_h = int(head_height_est / 0.75)
+            req_img_w = int(req_img_h * (std['w'] / std['h']))
+            
+            # 5. Determine Crop Box (Centering the Eye Line)
+            # ICAO: Eyes should be roughly 60% from the bottom (or 40% from top)
+            crop_y1 = eye_line_y - int(req_img_h * 0.4)
+            crop_x1 = center_x - req_img_w // 2
+            
+        else:
+            # Fallback: Center Crop if face fails
+            req_img_w, req_img_h = rgb_img.width, rgb_img.height
+            crop_x1, crop_y1 = 0, 0
+
+        # Safe Crop (Paste onto white canvas if out of bounds)
+        canvas = Image.new("RGB", (req_img_w, req_img_h), "WHITE")
         
-        # Calculate Crop Box
-        crop_y1 = top_y - int(req_h * 0.125)
-        crop_x1 = cx - req_w // 2
+        src_x1 = max(0, crop_x1)
+        src_y1 = max(0, crop_y1)
+        src_x2 = min(rgb_img.width, crop_x1 + req_img_w)
+        src_y2 = min(rgb_img.height, crop_y1 + req_img_h)
         
-        # Safe Crop Canvas
-        canvas = Image.new("RGB", (req_w, req_h), "WHITE")
-        src_x1, src_y1 = max(0, crop_x1), max(0, crop_y1)
-        src_x2, src_y2 = min(rgb_img.width, crop_x1+req_w), min(rgb_img.height, crop_y1+req_h)
-        dst_x, dst_y = max(0, -crop_x1), max(0, -crop_y1)
+        dst_x = max(0, -crop_x1)
+        dst_y = max(0, -crop_y1)
         
         if src_x2 > src_x1 and src_y2 > src_y1:
             region = rgb_img.crop((src_x1, src_y1, src_x2, src_y2))
             canvas.paste(region, (dst_x, dst_y))
-        rgb_img = canvas
-
-        # 3. Final Resize & Compress
-        final = rgb_img.resize((std['w'], std['h']), Image.Resampling.LANCZOS)
         
-        out = io.BytesIO()
-        if quality_mode == "Max Quality (Uncompressed)":
-            final.save(out, format="JPEG", quality=100, subsampling=0)
-        elif quality_mode == "Standard (~250 KB)":
-            q = 95
-            while q > 50:
-                out = io.BytesIO()
-                final.save(out, format="JPEG", quality=q)
-                if out.tell() / 1024 < 250: break
-                q -= 5
-        elif quality_mode == "Strict Upload (< 100 KB)":
-            q = 90
-            while q > 10:
-                out = io.BytesIO()
-                final.save(out, format="JPEG", quality=q)
-                if out.tell() / 1024 < 100: break
-                q -= 5
+        final_img = canvas
 
+        # 3. Final Resize to Exact Target
+        final_output = final_img.resize((std['w'], std['h']), Image.Resampling.LANCZOS)
+        
+        # 4. Save (Max Quality)
+        out = io.BytesIO()
+        final_output.save(out, format="JPEG", quality=100, subsampling=0)
         out.seek(0)
+        
         return out, out.tell() / 1024
         
     except Exception as e:
         return None, str(e)
 
-# --- 7. UI SIDEBAR (STANDARDS TABLE) ---
+# --- 6. SIDEBAR CONTROLS ---
 with st.sidebar:
-    st.markdown("### 📋 Requirements")
-    df = pd.DataFrame(PHOTO_STANDARDS).T.reset_index()
-    df = df.rename(columns={"index": "Country", "mm": "Size", "kb": "Max KB"})
-    st.dataframe(df[["Country", "Size", "Max KB"]], hide_index=True, use_container_width=True)
+    st.markdown("### ⚙️ Settings")
+    
+    # Country Selection
+    selected_country = st.selectbox("Target Country:", list(PHOTO_STANDARDS.keys()))
+    st.session_state.selected_std = selected_country
+    
+    # Background Mode
+    bg_mode = st.radio("Background Mode:", ["Auto-Remove (White BG)", "Keep Original (Hair Safe)"])
+    st.session_state.bg_mode = bg_mode
     
     st.divider()
-    st.markdown("### ⚙️ Settings")
-    selected = st.selectbox("1. Country:", list(PHOTO_STANDARDS.keys()))
-    st.session_state.selected_std = selected
-    
-    bg_choice = st.radio("2. Background:", ["Auto-Remove (White BG)", "Keep Original (Fixes Hair)"])
-    st.session_state.bg_mode = bg_choice
-    
-    q_mode = st.selectbox("3. Quality:", ["Standard (~250 KB)", "Max Quality (Uncompressed)", "Strict Upload (< 100 KB)"])
-    st.session_state.target_quality = q_mode
+    st.info("ℹ️ 'Keep Original' is best if you already have a white wall behind you. It ensures hair details are perfect.")
 
-# --- 8. MAIN UI FLOW ---
-st.markdown("<h1 style='text-align: center;'>Passport AI ✨</h1>", unsafe_allow_html=True)
+# --- 7. MAIN INTERFACE ---
+st.markdown("<h1 style='text-align: center;'>Global Passport Pro ✨</h1>", unsafe_allow_html=True)
 
 if st.session_state.step == 1:
+    
+    # --- DIMENSION TABLE (Nice Expander) ---
+    with st.expander("📊 View Size & Dimension Standards", expanded=False):
+        df = pd.DataFrame(PHOTO_STANDARDS).T.reset_index()
+        df = df.rename(columns={"index": "Country", "mm": "Size (mm)", "w": "Px Width", "h": "Px Height", "kb": "Max KB"})
+        st.dataframe(df[["Country", "Size (mm)", "Px Width", "Px Height", "Max KB"]], hide_index=True, use_container_width=True)
+
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     
-    tab_up, tab_cam = st.tabs(["📤 Upload", "📸 Camera"])
-    
+    # TABS
+    tab_up, tab_cam = st.tabs(["📤 Upload Photo", "📸 Take Selfie"])
     img_buffer = None
+    
     with tab_up:
         uploaded = st.file_uploader("Upload", type=['jpg','png','jpeg'], label_visibility="collapsed")
         if uploaded: img_buffer = uploaded
+            
     with tab_cam:
         if not st.session_state.cam_active:
             if st.button("🔵 Open Camera"): st.session_state.cam_active = True; st.rerun()
@@ -234,90 +198,80 @@ if st.session_state.step == 1:
             if snap: img_buffer = snap
             if st.button("❌ Close Camera"): st.session_state.cam_active = False; st.rerun()
 
+    # --- IMAGE PREVIEW & ACTION ---
     if img_buffer:
-        try:
-            img = Image.open(img_buffer)
-            img = ImageOps.exif_transpose(img)
-            st.session_state.input_image = img
-            st.session_state.file_size_kb = img_buffer.size / 1024
+        img = Image.open(img_buffer)
+        img = ImageOps.exif_transpose(img)
+        st.session_state.input_image = img
+        
+        # Two column layout for "Before" state
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.image(img, caption="Original Upload", use_container_width=True)
             
-            with st.spinner("🔍 Auditing Image..."):
-                res = analyze_image(img, st.session_state.file_size_kb, selected)
-                st.session_state.validation_result = res
-
-            # --- TOP SECTION: ACTION BUTTONS ---
-            col_actions, col_preview = st.columns([1, 1])
+        with col2:
+            st.markdown("### 🔍 Action Required")
+            st.markdown(f"**Target:** {selected_country}")
+            st.markdown(f"**Mode:** {bg_mode}")
             
-            with col_actions:
-                st.subheader("Analysis Result")
-                if res['is_compliant']:
-                    st.success("✅ This photo is perfect!")
-                    buf = io.BytesIO(); img.save(buf, format="JPEG")
-                    st.download_button("⬇️ Download As-Is", buf.getvalue(), "compliant.jpg", "image/jpeg", use_container_width=True)
-                else:
-                    st.error("⚠️ Adjustments Needed")
-                    btn_label = f"✨ Auto-Fix ({'Keep BG' if 'Keep' in bg_choice else 'White BG'})"
-                    if st.button(btn_label, type="primary", use_container_width=True):
-                        st.session_state.step = 2; st.rerun()
-
-                # Metrics Table (Compact)
-                metrics = {
-                    "Check": ["Dimensions", "Size", "Face"],
-                    "Status": [
-                        "✅ Pass" if res['dim_ok'] else "❌ Fail",
-                        "✅ Pass" if res['size_ok'] else f"❌ {res['current_kb']:.0f}KB",
-                        "✅ Pass" if res['icao_ok'] else "⚠️ Check"
-                    ]
-                }
-                st.table(pd.DataFrame(metrics))
-
-            with col_preview:
-                st.image(img, caption="Preview", use_container_width=True)
-                
-        except Exception as e:
-            st.error(f"Error: {e}")
+            # Primary Action Button aligned top
+            if st.button("✨ Auto-Fix & Generate", type="primary"):
+                st.session_state.step = 2; st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+    
+    # ICAO Guide below
+    
 
+# --- STEP 2: PROCESSING & RESULT ---
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     
-    with st.status("🚀 Processing...", expanded=True) as status:
-        if "Keep" in st.session_state.bg_mode:
-            st.write("🛡️ Preserving original background (Hair Safe Mode)...")
-        else:
-            st.write("✂️ Removing background...")
-            
-        st.write("📏 Aligning geometry...")
+    # Run processing
+    with st.spinner("🤖 AI is aligning face geometry to ICAO standards..."):
+        # Artificial delay for UX
+        time.sleep(0.8)
         
-        buf, error_msg = process_photo(
-            st.session_state.input_image, 
+        buf, size_kb = process_photo(
+            st.session_state.input_image,
             PHOTO_STANDARDS[st.session_state.selected_std],
-            st.session_state.target_quality,
             st.session_state.bg_mode
         )
         
-        if buf is None:
-            status.update(label="Failed!", state="error")
-            st.error(f"Error: {error_msg}")
-            if st.button("⬅️ Go Back"): st.session_state.step = 1; st.rerun()
-        else:
+        if buf:
             st.session_state.processed_image = buf
-            st.session_state.final_size = error_msg
-            status.update(label="Done!", state="complete", expanded=False)
+            st.session_state.final_size = size_kb
             st.session_state.step = 3; st.rerun()
+        else:
+            st.error(f"Processing failed: {size_kb}")
+            if st.button("Back"): st.session_state.step = 1; st.rerun()
             
     st.markdown('</div>', unsafe_allow_html=True)
 
+# --- STEP 3: DOWNLOAD ---
 elif st.session_state.step == 3:
-    st.markdown('<div class="glass-card" style="text-align: center;">', unsafe_allow_html=True)
-    st.markdown("### ✅ Ready to Download")
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     
-    st.image(st.session_state.processed_image, width=300)
-    st.caption(f"Final Size: {st.session_state.final_size:.1f} KB")
+    col_res1, col_res2 = st.columns([1, 1])
     
-    st.download_button("⬇️ Download Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg", type="primary")
-    
-    st.markdown(f'<br><a href="https://paypal.me/698789" target="_blank" class="paypal-btn">☕ Buy me a Coffee</a>', unsafe_allow_html=True)
-    if st.button("🔄 Start Over"): st.session_state.step = 1; st.rerun()
+    with col_res1:
+        st.image(st.session_state.processed_image, caption="Final Passport Photo", use_container_width=True)
+        
+    with col_res2:
+        st.markdown("### ✅ Ready!")
+        st.markdown(f"**Specs:** {PHOTO_STANDARDS[st.session_state.selected_std]['w']}x{PHOTO_STANDARDS[st.session_state.selected_std]['h']} px")
+        st.markdown(f"**Size:** {st.session_state.final_size:.1f} KB")
+        
+        st.download_button(
+            label="⬇️ Download Image",
+            data=st.session_state.processed_image,
+            file_name="passport_photo.jpg",
+            mime="image/jpeg",
+            type="primary"
+        )
+        
+        if st.button("🔄 Start Over"):
+            st.session_state.step = 1; st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
