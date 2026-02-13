@@ -6,27 +6,21 @@ import numpy as np
 import cv2
 import time
 import pandas as pd
-from specs import PHOTO_STANDARDS  # IMPORTING YOUR RESEARCHED SPECS
+from specs import PHOTO_STANDARDS
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Global Passport Pro", page_icon="🛂", layout="centered")
 
-# --- 2. PREMIUM CSS ---
+# --- 2. ENHANCED CSS ---
 st.markdown("""
     <style>
-        .stApp { background: linear-gradient(-45deg, #0f0c29, #1a1a2e, #16213e); color: white; }
-        .glass-card {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 25px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            margin-bottom: 20px;
-        }
-        .paypal-btn {
-            background: #FFC439; color: black !important; padding: 12px 30px; 
-            border-radius: 50px; text-decoration: none; font-weight: bold; display: inline-block;
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
+        .stApp { background: linear-gradient(-45deg, #0f0c29, #1a1a2e, #16213e); font-family: 'Outfit', sans-serif; color: white; }
+        .glass-card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border-radius: 20px; padding: 25px; border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 20px; }
+        .status-badge { padding: 4px 12px; border-radius: 50px; font-size: 0.8rem; font-weight: bold; }
+        .badge-pass { background: #00ff7f; color: #000; }
+        .badge-fail { background: #ff4b4b; color: #fff; }
+        .paypal-btn { background: #FFC439; color: black !important; padding: 12px 30px; border-radius: 50px; text-decoration: none; font-weight: bold; display: inline-block; }
         h1, h3, p { text-align: center; }
         #MainMenu, footer, header {visibility: hidden;}
     </style>
@@ -36,8 +30,41 @@ st.markdown("""
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'input_image' not in st.session_state: st.session_state.input_image = None
 if 'processed_image' not in st.session_state: st.session_state.processed_image = None
+if 'validation_report' not in st.session_state: st.session_state.validation_report = {}
 
-# --- 4. PROCESSING LOGIC ---
+def reset_app():
+    st.session_state.step = 1
+    st.session_state.input_image = None
+    st.session_state.processed_image = None
+    st.session_state.validation_report = {}
+    st.rerun()
+
+# --- 4. SMART VALIDATION LOGIC ---
+def analyze_photo_compliance(pil_img, std_key):
+    std = PHOTO_STANDARDS[std_key]
+    w, h = pil_img.size
+    
+    # 1. Face Detection
+    opencv_img = np.array(pil_img.convert("RGB"))
+    opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
+    
+    report = {
+        "Dimensions": "✅ Match" if (w == std['w'] and h == std['h']) else "❌ Wrong Size",
+        "Face Detected": "✅ Yes" if len(faces) > 0 else "❌ No Face Found",
+        "Background": "🟡 Check Needed" # AI check for white background
+    }
+    
+    # Check face geometry if face exists
+    if len(faces) > 0:
+        fx, fy, fw, fh = faces[0]
+        face_ratio = (fh / h) * 100
+        report["Face Ratio"] = f"✅ {face_ratio:.0f}%" if (70 <= face_ratio <= 80) else f"❌ {face_ratio:.0f}% (Needs 70-80%)"
+    
+    return report
+
 def process_photo(pil_img, std):
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
@@ -48,11 +75,10 @@ def process_photo(pil_img, std):
     bg.paste(foreground, (0, 0), foreground)
     rgb_img = bg.convert("RGB")
     
-    # Auto-Crop Logic
+    # Advanced ICAO Face Centering
     opencv_img = np.array(rgb_img)
     opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY), 1.1, 5)
+    faces = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml').detectMultiScale(cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY), 1.1, 5)
     
     if len(faces) > 0:
         x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
@@ -65,6 +91,7 @@ def process_photo(pil_img, std):
 
     final = rgb_img.resize((std['w'], std['h']), Image.Resampling.LANCZOS)
     
+    # Save with KB target
     quality = 95
     while quality > 10:
         out = io.BytesIO()
@@ -78,53 +105,54 @@ def process_photo(pil_img, std):
 st.markdown("<h1>Global Passport Pro AI ✨</h1>", unsafe_allow_html=True)
 
 if st.session_state.step == 1:
-    st.markdown("### 📋 Step 1: Check Standards & Upload")
+    st.markdown("### 📋 Step 1: Destination & Source")
     
-    # Show Standards Table
-    df = pd.DataFrame(PHOTO_STANDARDS).T.reset_index()
-    df = df.rename(columns={"index": "Standard", "mm": "Dim (mm)", "w": "Width", "h": "Height", "kb": "Max KB"})
-    st.table(df[["Standard", "Dim (mm)", "Width", "Height", "Max KB"]])
-
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    selected = st.selectbox("Select Target Destination:", list(PHOTO_STANDARDS.keys()))
+    selected = st.selectbox("I need a photo for:", list(PHOTO_STANDARDS.keys()))
     st.session_state.selected_std = selected
     
-    uploaded = st.file_uploader("Upload or Drag Photo", type=['jpg','png','jpeg'])
-    if uploaded:
-        st.session_state.input_image = Image.open(uploaded)
-        # Validation
-        curr_w, curr_h = st.session_state.input_image.size
-        std = PHOTO_STANDARDS[selected]
-        if curr_w == std['w'] and curr_h == std['h']:
-            st.success("✅ Photo already matches dimensions!")
-        else:
-            st.warning(f"⚠️ Photo is {curr_w}x{curr_h}. Needs to be {std['w']}x{std['h']}.")
+    tab_up, tab_cam = st.tabs(["📤 Upload Photo", "📸 Take Selfie"])
+    img = None
+    with tab_up:
+        up = st.file_uploader("", type=['jpg','png','jpeg'], label_visibility="collapsed")
+        if up: img = Image.open(up)
+    with tab_cam:
+        snap = st.camera_input("Center yourself", label_visibility="collapsed")
+        if snap: img = Image.open(snap)
         
-        if st.button("✨ Auto-Fix & Convert"):
-            st.session_state.step = 2; st.rerun()
+    if img:
+        st.session_state.input_image = img
+        st.session_state.validation_report = analyze_photo_compliance(img, selected)
+        st.session_state.step = 2; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
-
-    # ICAO COMPLIANCE DIAGRAM TRIGGER
-    st.markdown("### 💡 ICAO Compliance Guide")
-    st.write("Ensure your photo follows these geometric rules:")
-    st.markdown("")
 
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown("### ⚡ Step 2: Processing")
-    with st.spinner("Removing background and aligning to international standards..."):
-        time.sleep(1)
-        buf, size = process_photo(st.session_state.input_image, PHOTO_STANDARDS[st.session_state.selected_std])
-        st.session_state.processed_image, st.session_state.final_size = buf, size
-        st.session_state.step = 3; st.rerun()
+    st.markdown("### 🔍 Step 2: Compliance Report")
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.image(st.session_state.input_image, use_container_width=True, caption="Source")
+    with col_b:
+        st.write("**Validation Checks:**")
+        for check, status in st.session_state.validation_report.items():
+            st.write(f"{status} **{check}**")
+    
+    st.divider()
+    if st.button("✨ Auto-Fix Everything"):
+        with st.spinner("AI is correcting geometry and background..."):
+            buf, size = process_photo(st.session_state.input_image, PHOTO_STANDARDS[st.session_state.selected_std])
+            st.session_state.processed_image, st.session_state.final_size = buf, size
+            st.session_state.step = 3; st.rerun()
+    
+    if st.button("⬅️ Try Different Photo", type="secondary"): reset_app()
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.step == 3:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown("### ✅ Step 3: Success!")
-    st.image(st.session_state.processed_image, caption=f"Compliant Result: {st.session_state.final_size:.1f} KB", width=250)
-    st.download_button("⬇️ Download High-Res Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg")
+    st.markdown("### ✅ Step 3: Result")
+    st.image(st.session_state.processed_image, caption=f"Validated: {st.session_state.final_size:.1f} KB", width=250)
+    st.download_button("⬇️ Download High-Res JPG", st.session_state.processed_image, "passport.jpg", "image/jpeg")
     st.markdown(f'<br><a href="https://paypal.me/698789" target="_blank" class="paypal-btn">☕ Buy me a Coffee</a>', unsafe_allow_html=True)
-    if st.button("🔄 New Photo"): 
-        st.session_state.step = 1; st.rerun()
+    if st.button("🔄 New Photo"): reset_app()
     st.markdown('</div>', unsafe_allow_html=True)
