@@ -1,142 +1,151 @@
 import streamlit as st
 from rembg import remove
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import io
 import numpy as np
 import cv2
 
-# --- 1. CONFIGURATION ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Passport Pro AI",
-    page_icon="🛂",
+    page_title="Passport AI Pro",
+    page_icon="✨",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. ADVANCED CSS (The "Glassmorphism" Look) ---
+# --- 2. HIGH-END GRAPHICS & ANIMATION (CSS) ---
 st.markdown("""
     <style>
-        /* IMPORT GOOGLE FONT */
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap');
+        /* IMPORT FONT (Outfit - Modern Sans) */
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap');
 
-        /* RESET & GLOBAL THEME */
-        html, body, [class*="css"] {
-            font-family: 'Poppins', sans-serif;
+        /* ANIMATED AURORA BACKGROUND */
+        .stApp {
+            background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e, #141E30);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            font-family: 'Outfit', sans-serif;
+            color: white;
         }
         
-        /* BACKGROUND GRADIENT */
-        .stApp {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            background-attachment: fixed;
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
         }
 
-        /* GLASSMORPHISM CARD */
-        .glass-card {
-            background: rgba(255, 255, 255, 0.75);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-radius: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
-            padding: 2.5rem;
-            margin-bottom: 2rem;
+        /* GLASSMORPHISM CARD CONTAINER */
+        .glass-container {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 2rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            margin-bottom: 20px;
         }
 
-        /* TYPOGRAPHY */
-        h1 {
-            color: #1a202c;
-            font-weight: 700 !important;
-            letter-spacing: -1px;
+        /* HERO TITLE GRADIENT TEXT */
+        .hero-text {
+            background: linear-gradient(to right, #00c6ff, #0072ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 3rem;
+            font-weight: 700;
             text-align: center;
-            margin-bottom: 0px !important;
-        }
-        p.subtitle {
-            color: #4a5568;
-            text-align: center;
-            font-size: 1.1rem;
-            margin-top: 0px;
-            margin-bottom: 2rem;
-            font-weight: 300;
-        }
-        h3 {
-            color: #2d3748;
-            font-weight: 600 !important;
-            font-size: 1.2rem !important;
-            margin-top: 1rem !important;
+            margin-bottom: 0;
         }
 
-        /* CUSTOM BUTTONS */
+        /* CUSTOM UPLOAD WIDGET STYLING */
+        .stFileUploader {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px dashed rgba(255, 255, 255, 0.3);
+        }
+
+        /* PRIMARY ACTION BUTTONS */
         div.stButton > button {
-            background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
-            color: white !important;
+            background: linear-gradient(92.88deg, #455EB5 9.16%, #5643CC 43.89%, #673FD7 64.72%);
+            color: white;
             border: none;
-            padding: 0.75rem 1.5rem;
+            padding: 12px 24px;
             border-radius: 12px;
             font-weight: 600;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
+            font-size: 1.1rem;
             width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 14px 0 rgba(0,118,255,0.39);
         }
         div.stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
-        }
-        div.stButton > button:active {
-            transform: translateY(1px);
+            transform: scale(1.02);
+            box-shadow: 0 6px 20px rgba(0,118,255,0.23);
         }
 
-        /* HIDE UGLY STREAMLIT ELEMENTS */
+        /* BUY ME A COFFEE BUTTON */
+        .coffee-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #FFDD00;
+            color: #000;
+            font-weight: 700;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            box-shadow: 0 4px 15px rgba(255, 221, 0, 0.4);
+            transition: all 0.3s ease;
+            margin: 20px auto;
+            width: fit-content;
+        }
+        .coffee-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(255, 221, 0, 0.6);
+            color: black;
+        }
+
+        /* HIDE DEFAULT STREAMLIT ELEMENTS */
         #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
         header {visibility: hidden;}
+        footer {visibility: hidden;}
         
-        /* CUSTOM TABS */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 10px;
-            background-color: transparent;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background-color: rgba(255,255,255,0.5);
-            border-radius: 10px;
-            padding: 10px 20px;
-            border: none;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: #fff !important;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            font-weight: 600 !important;
-            color: #4b6cb7 !important;
-        }
+        /* TEXT OVERRIDES */
+        h1, h2, h3, p, div, label { color: white !important; }
+        .stSuccess { background-color: rgba(0, 255, 127, 0.1) !important; color: #00ff7f !important; }
+        
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. LOGIC (Same Robust Backend) ---
+# --- 3. PROCESSING LOGIC (Robust & Fast) ---
 TARGET_W, TARGET_H = 630, 810
 MAX_FILE_SIZE_KB = 250
 
 def process_image(input_image):
+    # 1. REMOVE BG
     buf = io.BytesIO()
     input_image.save(buf, format="PNG")
     subject_data = remove(buf.getvalue(), alpha_matting=True)
     foreground = Image.open(io.BytesIO(subject_data)).convert("RGBA")
     
+    # 2. WHITE BG
     new_bg = Image.new("RGBA", foreground.size, "WHITE")
     new_bg.paste(foreground, (0, 0), foreground)
     final_rgb = new_bg.convert("RGB")
     
+    # 3. DETECT & CROP
     opencv_img = np.array(final_rgb)
     opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
     
-    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    face_cascade = cv2.CascadeClassifier(cascade_path)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     faces = face_cascade.detectMultiScale(gray, 1.1, 5)
     
     if len(faces) > 0:
         x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+        # ICAO Logic
         face_cx, face_cy = x + w//2, y + h//2
-        head_h = h * 1.5
+        head_h = h * 1.55 # Padding for hair
         req_h = int(head_h / 0.75)
         req_w = int(req_h * (TARGET_W / TARGET_H))
         
@@ -144,10 +153,12 @@ def process_image(input_image):
         c_y1 = (face_cy - req_h // 2) - int(req_h * 0.1)
         c_x2, c_y2 = c_x1 + req_w, c_y1 + req_h
         
+        # Pad and Crop
         final_rgb_padded = Image.new("RGB", (final_rgb.width + req_w*2, final_rgb.height + req_h*2), "WHITE")
         final_rgb_padded.paste(final_rgb, (req_w, req_h))
         final_rgb = final_rgb_padded.crop((c_x1+req_w, c_y1+req_h, c_x2+req_w, c_y2+req_h))
 
+    # 4. RESIZE & COMPRESS
     final_rgb = final_rgb.resize((TARGET_W, TARGET_H), Image.Resampling.LANCZOS)
     
     quality = 95
@@ -162,77 +173,78 @@ def process_image(input_image):
 
 # --- 4. UI LAYOUT ---
 
-# Header Section
-st.markdown("<h1>Passport Pro AI 🛂</h1>", unsafe_allow_html=True)
-st.markdown("<p class='subtitle'>Professional Indian Passport Photos in seconds.</p>", unsafe_allow_html=True)
+# Header
+st.markdown('<h1 class="hero-text">Passport AI ✨</h1>', unsafe_allow_html=True)
+st.markdown('<p style="text-align: center; opacity: 0.8; margin-bottom: 30px;">Professional • Private • Instant</p>', unsafe_allow_html=True)
 
 # Main Glass Card
-st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+st.markdown('<div class="glass-container">', unsafe_allow_html=True)
 
-# Mode Selection Tabs
-tab_upload, tab_cam = st.tabs(["📤 Upload File", "📸 Use Camera"])
-
+# Tabs
+tab_up, tab_cam = st.tabs(["📤 Upload", "📸 Camera"])
 img_file = None
 
-with tab_upload:
-    st.markdown("### Drop your photo here")
-    uploaded = st.file_uploader("", type=['jpg','png','jpeg'], label_visibility="collapsed")
+with tab_up:
+    uploaded = st.file_uploader("Drop your photo here", type=['jpg','png','jpeg'])
     if uploaded: img_file = uploaded
 
 with tab_cam:
-    st.markdown("### Take a Selfie")
-    # Camera Toggle Logic
+    # Camera Logic (Hidden by default)
     if "cam_active" not in st.session_state: st.session_state.cam_active = False
     
     if not st.session_state.cam_active:
-        if st.button("🔴 Activate Camera"):
-            st.session_state.cam_active = True
-            st.rerun()
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            if st.button("🔵 Start Camera"):
+                st.session_state.cam_active = True
+                st.rerun()
     else:
-        cam_snap = st.camera_input("Look straight and center your face", label_visibility="collapsed")
-        if cam_snap: img_file = cam_snap
+        img_captured = st.camera_input("Center your face", label_visibility="collapsed")
+        if img_captured: img_file = img_captured
         if st.button("❌ Close Camera"):
             st.session_state.cam_active = False
             st.rerun()
 
-# Processing & Result Section
+st.markdown('</div>', unsafe_allow_html=True)
+
+# Result Section
 if img_file:
-    st.markdown("---")
+    st.markdown('<div class="glass-container">', unsafe_allow_html=True)
+    st.markdown("### ✨ Magic Studio")
     
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("<h3 style='text-align: center'>Original</h3>", unsafe_allow_html=True)
-        st.image(img_file, use_container_width=True)
-        
+        st.image(img_file, caption="Original", use_container_width=True)
+    
     with col2:
-        st.markdown("<h3 style='text-align: center'>Passport Ready</h3>", unsafe_allow_html=True)
-        
-        # Placeholder for result
-        result_placeholder = st.empty()
-        
-        # Process Button
-        if result_placeholder.button("✨ Generate Photo"):
-            with st.spinner("Applying AI magic..."):
+        # Process Button & Result
+        process_btn = st.button("⚡ Generate Passport Photo")
+        if process_btn:
+            with st.spinner("Applying AI Magic..."):
                 final_buffer = process_image(Image.open(img_file))
                 
-                # Update placeholder with result
-                result_placeholder.image(final_buffer, use_container_width=True)
-                
-                # Show Download Button
-                st.balloons()
-                st.download_button(
-                    label="⬇️ Download High-Res Image",
-                    data=final_buffer,
-                    file_name="passport_photo.jpg",
-                    mime="image/jpeg"
-                )
+            st.success("Ready for Download!")
+            st.image(final_buffer, caption="Passport Ready (630x810)", use_container_width=True)
+            
+            st.download_button(
+                label="⬇️ Download HD Image",
+                data=final_buffer,
+                file_name="passport_photo.jpg",
+                mime="image/jpeg"
+            )
+            
+    st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True) # End Glass Card
-
-# Footer
+# --- 5. BUY ME A COFFEE (PREMIUM FOOTER) ---
 st.markdown("""
-    <div style='text-align: center; color: #666; padding: 20px; font-size: 0.8rem;'>
-        Secure & Private • No data saved • ICAO Compliant<br>
-        Built with ❤️ using Python & AI
+    <br><br>
+    <div style="text-align: center;">
+        <p style="font-size: 1.2rem; margin-bottom: 10px;">Found this useful?</p>
+        <a href="https://paypal.me/698789" target="_blank" class="coffee-btn">
+            ☕ Buy me a Coffee
+        </a>
+        <p style="font-size: 0.8rem; opacity: 0.5; margin-top: 20px;">
+            Secure Processing • No Data Saved • ICAO Compliant
+        </p>
     </div>
 """, unsafe_allow_html=True)
