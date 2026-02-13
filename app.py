@@ -35,7 +35,6 @@ st.markdown("""
             padding: 0.6rem 1rem;
             margin-top: 10px;
         }
-        /* Hide elements */
         #MainMenu, footer, header {visibility: hidden;}
         .stFileUploader label, .stCameraInput label { display: none; }
     </style>
@@ -45,8 +44,7 @@ st.markdown("""
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'input_image' not in st.session_state: st.session_state.input_image = None
 if 'processed_image' not in st.session_state: st.session_state.processed_image = None
-if 'cam_active' not in st.session_state: st.session_state.cam_active = False
-if 'custom_specs' not in st.session_state: st.session_state.custom_specs = {"w": 600, "h": 600, "kb": 250}
+if 'custom_specs' not in st.session_state: st.session_state.custom_specs = {"w": 600, "h": 600, "kb": 250, "mm": "Custom"}
 
 # --- 4. UTILS ---
 def resize_if_huge(img, max_dim=1500):
@@ -56,7 +54,7 @@ def resize_if_huge(img, max_dim=1500):
         return img.resize((int(w*ratio), int(h*ratio)), Image.Resampling.LANCZOS)
     return img
 
-# --- 5. ICAO PROCESSING ENGINE (HAIR SAFE) ---
+# --- 5. ICAO PROCESSING ENGINE ---
 def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
     try:
         # 0. Safety Resize
@@ -84,40 +82,32 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
         faces = face_cascade.detectMultiScale(gray, 1.1, 5)
         
         if len(faces) > 0:
-            # Largest face
             fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-            
             center_x = fx + fw // 2
             
-            # --- HAIR-SAFE LOGIC ---
-            # Instead of placing eyes high (40%), we place them lower (48%)
-            # This pushes the face down, leaving more room at the top for hair.
-            eye_line_y = fy + int(fh * 0.45) # Estimate eye level within face box
+            # --- ICAO LOGIC ---
+            # Eye line roughly at 45% from top of face box
+            eye_line_y = fy + int(fh * 0.45) 
             
             # Estimate full head height (Chin to Crown)
-            # Chin is roughly bottom of box. Crown is roughly 1.5x face height above chin.
             chin_y = fy + fh
-            head_height_est = (chin_y - eye_line_y) * 2.4 # Generous multiplier for hair
+            head_height_est = (chin_y - eye_line_y) * 2.4 
             
-            # Calculate required canvas size to fit this head
-            # Target: Head should be ~75% of image height
+            # Head = ~75% of image height
             req_img_h = int(head_height_est / 0.75)
             req_img_w = int(req_img_h * (target_w / target_h))
             
-            # Anchor Crop: Place Eye Line at 48% from top (Safe Zone)
+            # Crop anchor: Eye line at 48% from top
             crop_y1 = eye_line_y - int(req_img_h * 0.48)
             crop_x1 = center_x - req_img_w // 2
             
         else:
-            # Fallback: Center Crop
             req_img_w, req_img_h = rgb_img.width, rgb_img.height
             crop_x1, crop_y1 = 0, 0
 
-        # Safe Paste (Handle out of bounds)
+        # Safe Paste
         canvas = Image.new("RGB", (req_img_w, req_img_h), "WHITE")
-        
-        src_x1 = max(0, crop_x1)
-        src_y1 = max(0, crop_y1)
+        src_x1, src_y1 = max(0, crop_x1), max(0, crop_y1)
         src_x2 = min(rgb_img.width, crop_x1 + req_img_w)
         src_y2 = min(rgb_img.height, crop_y1 + req_img_h)
         
@@ -133,7 +123,7 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
         # 3. Final Resize
         final_output = final_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
         
-        # 4. Smart Compress Loop
+        # 4. Smart Compress
         quality = 100
         while quality > 10:
             out = io.BytesIO()
@@ -153,34 +143,30 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     
-    # 1. Country Selector (Empty Default)
     options = ["Select a Country..."] + list(PHOTO_STANDARDS.keys()) + ["🛠️ Custom / Manual Input"]
     selected_option = st.selectbox("1. Target Standard:", options)
     
     target_specs = None
     
-    # Logic for Custom vs Standard
     if selected_option == "Select a Country...":
         st.warning("👈 Please select a country to start.")
     
     elif selected_option == "🛠️ Custom / Manual Input":
         st.markdown("---")
-        st.markdown("**Manual Specifications:**")
+        c_mm = st.text_input("Dimensions (e.g. 35x45 mm)", value="35x45 mm") # Added MM input
         c_w = st.number_input("Width (px)", value=600)
         c_h = st.number_input("Height (px)", value=600)
         c_kb = st.number_input("Max Size (KB)", value=250)
-        target_specs = {"w": c_w, "h": c_h, "kb": c_kb, "desc": "Custom"}
+        target_specs = {"w": c_w, "h": c_h, "kb": c_kb, "mm": c_mm} # Store MM here
         
     else:
-        # Standard Selection
         target_specs = PHOTO_STANDARDS[selected_option]
-        # Show read-only info
-        st.info(f"📏 {target_specs['w']}x{target_specs['h']} px\n💾 Max {target_specs['kb']} KB")
+        # FIXED: Now showing MM explicitly in the sidebar info
+        st.info(f"📏 {target_specs['mm']}\n🖼️ {target_specs['w']}x{target_specs['h']} px\n💾 Max {target_specs['kb']} KB")
 
     st.markdown("---")
     bg_mode = st.radio("2. Background Mode:", ["Auto-Remove (White BG)", "Keep Original (Hair Safe)"])
     
-    # Save to session
     if target_specs:
         st.session_state.custom_specs = target_specs
         st.session_state.bg_mode = bg_mode
@@ -188,7 +174,6 @@ with st.sidebar:
 # --- 7. MAIN INTERFACE ---
 st.markdown("<h1 style='text-align: center;'>Passport AI ✨</h1>", unsafe_allow_html=True)
 
-# Step 1: Upload (Only if Country Selected)
 if st.session_state.step == 1:
     
     if selected_option == "Select a Country...":
@@ -212,20 +197,17 @@ if st.session_state.step == 1:
                 if snap: img_buffer = snap
                 if st.button("❌ Close Camera"): st.session_state.cam_active = False; st.rerun()
 
-        # VALIDATION & PREVIEW LOGIC
         if img_buffer:
             img = Image.open(img_buffer)
             img = ImageOps.exif_transpose(img)
             st.session_state.input_image = img
             
-            # Calc Metrics
             curr_w, curr_h = img.size
             curr_kb = img_buffer.size / 1024
             req = st.session_state.custom_specs
             
             is_perfect = (curr_w == req['w'] and curr_h == req['h'] and curr_kb <= req['kb'])
             
-            # --- TWO COLUMN LAYOUT ---
             col_img, col_info = st.columns([1, 1.2])
             
             with col_img:
@@ -233,39 +215,29 @@ if st.session_state.step == 1:
             
             with col_info:
                 if is_perfect:
-                    st.success("✅ Perfect Match! No changes needed.")
-                    st.markdown("Your photo already meets the requirements.")
+                    st.success("✅ Perfect Match!")
                 else:
                     st.error("⚠️ Action Required")
-                    st.markdown(f"**Issues Detected:**")
+                    st.markdown(f"**Target:** {req['mm']} | {req['w']}x{req['h']} px") # FIXED: Added MM display here
                     
-                    # Dynamic Error List
                     if curr_w != req['w'] or curr_h != req['h']:
-                        st.markdown(f"- ❌ **Dimensions:** {curr_w}x{curr_h} (Need {req['w']}x{req['h']})")
+                        st.markdown(f"- ❌ **Dims:** {curr_w}x{curr_h} px")
                     if curr_kb > req['kb']:
-                        st.markdown(f"- ❌ **File Size:** {curr_kb:.0f} KB (Limit {req['kb']} KB)")
+                        st.markdown(f"- ❌ **Size:** {curr_kb:.0f} KB (Max {req['kb']} KB)")
                     
                     st.markdown(f"- ℹ️ **Mode:** {bg_mode}")
                 
-                # ACTION BUTTONS (Aligned Top)
                 if st.button("✨ Auto-Fix & Generate", type="primary"):
                     st.session_state.step = 2; st.rerun()
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-# Step 2: Processing
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    
     with st.spinner("🤖 AI is aligning face and fixing dimensions..."):
         time.sleep(0.5)
         req = st.session_state.custom_specs
-        
-        buf, size_val = process_photo(
-            st.session_state.input_image,
-            req['w'], req['h'], req['kb'],
-            st.session_state.bg_mode
-        )
+        buf, size_val = process_photo(st.session_state.input_image, req['w'], req['h'], req['kb'], st.session_state.bg_mode)
         
         if buf:
             st.session_state.processed_image = buf
@@ -274,10 +246,8 @@ elif st.session_state.step == 2:
         else:
             st.error(f"Error: {size_val}")
             if st.button("Back"): st.session_state.step = 1; st.rerun()
-            
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Step 3: Download
 elif st.session_state.step == 3:
     st.markdown('<div class="glass-card" style="text-align: center;">', unsafe_allow_html=True)
     
@@ -286,17 +256,15 @@ elif st.session_state.step == 3:
         st.image(st.session_state.processed_image, caption="Result", use_container_width=True)
     with col2:
         st.success("✅ Processing Complete")
-        st.markdown(f"**Final Size:** {st.session_state.final_size:.1f} KB")
         
-        st.download_button(
-            label="⬇️ Download Photo",
-            data=st.session_state.processed_image,
-            file_name="passport_photo.jpg",
-            mime="image/jpeg",
-            type="primary"
-        )
+        # FIXED: Added MM display to final results
+        req = st.session_state.custom_specs
+        st.markdown(f"**Dimensions:** {req['mm']}") 
+        st.markdown(f"**Resolution:** {req['w']}x{req['h']} px")
+        st.markdown(f"**File Size:** {st.session_state.final_size:.1f} KB")
         
-        if st.button("🔄 Process Another"):
-            st.session_state.step = 1; st.rerun()
+        st.download_button("⬇️ Download Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg", type="primary")
+        
+        if st.button("🔄 Process Another"): st.session_state.step = 1; st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
