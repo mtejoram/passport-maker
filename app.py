@@ -28,8 +28,6 @@ st.markdown("""
             border: 1px solid rgba(255, 255, 255, 0.1);
             margin-bottom: 20px;
         }
-        .success-box { border-left: 5px solid #00ff7f; background: rgba(0, 255, 127, 0.1); padding: 15px; border-radius: 5px; }
-        .fail-box { border-left: 5px solid #ff4b4b; background: rgba(255, 75, 75, 0.1); padding: 15px; border-radius: 5px; }
         .paypal-btn {
             background: #FFC439; color: black !important; padding: 12px 30px; 
             border-radius: 50px; text-decoration: none; font-weight: bold; display: inline-block;
@@ -47,10 +45,10 @@ if 'processed_image' not in st.session_state: st.session_state.processed_image =
 if 'file_size_kb' not in st.session_state: st.session_state.file_size_kb = 0
 if 'cam_active' not in st.session_state: st.session_state.cam_active = False
 if 'validation_result' not in st.session_state: st.session_state.validation_result = None
+if 'bg_mode' not in st.session_state: st.session_state.bg_mode = "Auto-Remove (AI)"
 
 # --- 4. SAFETY UTILS ---
-def resize_if_huge(img, max_dim=1024):
-    """Resizes image before processing to prevent memory crashes."""
+def resize_if_huge(img, max_dim=1500):
     w, h = img.size
     if w > max_dim or h > max_dim:
         ratio = min(max_dim/w, max_dim/h)
@@ -65,7 +63,6 @@ def analyze_image(pil_img, size_kb, std_key):
     dim_check = (w == std['w'] and h == std['h'])
     size_check = (size_kb <= std['kb'])
     
-    # Analyze Face
     opencv_img = np.array(pil_img.convert("RGB"))
     opencv_img = cv2.cvtColor(opencv_img, cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(opencv_img, cv2.COLOR_BGR2GRAY)
@@ -96,36 +93,40 @@ def analyze_image(pil_img, size_kb, std_key):
 
 # --- 6. PROCESSING LOGIC ---
 @st.cache_data(show_spinner=False)
-def process_photo(pil_img, std, quality_mode):
+def process_photo(pil_img, std, quality_mode, bg_choice):
     try:
         # 0. Safety Resize
         work_img = resize_if_huge(pil_img)
 
-        # 1. Remove Background
+        # 1. Determine Mask (We ALWAYS need the mask for crop coordinates, even if we keep BG)
         buf = io.BytesIO()
         work_img.save(buf, format="PNG")
         
-        # 'alpha_matting' is heavy, so we wrap it
-        subject = remove(buf.getvalue(), alpha_matting=True, alpha_matting_foreground_threshold=240)
-        foreground = Image.open(io.BytesIO(subject)).convert("RGBA")
+        # Get mask only first
+        subject_mask = remove(buf.getvalue(), only_mask=True, alpha_matting=True)
+        mask_img = Image.open(io.BytesIO(subject_mask)).convert("L") # Grayscale mask
         
-        # 2. Smooth Edges
-        r, g, b, a = foreground.split()
-        a = a.filter(ImageFilter.GaussianBlur(radius=0.5))
-        foreground = Image.merge("RGBA", (r, g, b, a))
+        # Prepare the image layer based on user choice
+        if bg_choice == "Auto-Remove (White BG)":
+            # Apply mask to create white background
+            foreground = work_img.convert("RGBA")
+            bg = Image.new("RGBA", foreground.size, "WHITE")
+            # Use mask to paste foreground onto white
+            final_composite = Image.composite(foreground, bg, mask_img)
+            rgb_img = final_composite.convert("RGB")
+        else:
+            # "Keep Original" - Just use the original image
+            rgb_img = work_img.convert("RGB")
 
-        # 3. White BG
-        bg = Image.new("RGBA", foreground.size, "WHITE")
-        bg.paste(foreground, (0, 0), foreground)
-        rgb_img = bg.convert("RGB")
-        
-        # 4. Smart Crop
-        alpha_np = np.array(foreground)[:, :, 3]
-        rows = np.where(np.max(alpha_np, axis=1) > 0)[0]
+        # 2. Smart Crop Calculation (Using the Mask)
+        # We use the mask to find head position, even if we don't remove the BG
+        mask_np = np.array(mask_img)
+        rows = np.where(np.max(mask_np, axis=1) > 0)[0]
         
         if len(rows) > 0:
             top_y, bottom_y = rows[0], rows[-1]
-            # Face Detect
+            
+            # Face Detect for X-centering
             cv_img = cv2.cvtColor(np.array(rgb_img), cv2.COLOR_RGB2BGR)
             gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
             faces = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml').detectMultiScale(gray, 1.1, 5)
@@ -158,7 +159,7 @@ def process_photo(pil_img, std, quality_mode):
                 canvas.paste(region, (dst_x, dst_y))
             rgb_img = canvas
 
-        # 5. Final Resize & Compress
+        # 3. Final Resize & Compress
         final = rgb_img.resize((std['w'], std['h']), Image.Resampling.LANCZOS)
         
         out = io.BytesIO()
@@ -191,22 +192,21 @@ st.markdown("<h1>Global Passport Pro AI ✨</h1>", unsafe_allow_html=True)
 if st.session_state.step == 1:
     st.markdown("### 📋 Step 1: Config & Upload")
     
-    df = pd.DataFrame(PHOTO_STANDARDS).T.reset_index()
-    df = df.rename(columns={"index": "Country", "mm": "Size", "w": "W", "h": "H", "kb": "Max KB"})
-    st.dataframe(df[["Country", "Size", "W", "H", "Max KB"]], hide_index=True, use_container_width=True)
-
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
     with col_a:
-        selected = st.selectbox("Country:", list(PHOTO_STANDARDS.keys()))
+        selected = st.selectbox("1. Country:", list(PHOTO_STANDARDS.keys()))
         st.session_state.selected_std = selected
     with col_b:
-        q_mode = st.selectbox("Quality:", ["Standard (~250 KB)", "Max Quality (Uncompressed)", "Strict Upload (< 100 KB)"])
+        q_mode = st.selectbox("2. Quality:", ["Standard (~250 KB)", "Max Quality (Uncompressed)", "Strict Upload (< 100 KB)"])
         st.session_state.target_quality = q_mode
+        
+    # NEW BACKGROUND CONTROL
+    bg_choice = st.radio("3. Background Processing:", ["Auto-Remove (White BG)", "Keep Original (Fixes Hair Issues)"], horizontal=True)
+    st.session_state.bg_mode = bg_choice
     
     tab_up, tab_cam = st.tabs(["📤 Upload", "📸 Camera"])
     
-    # INPUT HANDLER
     img_buffer = None
     with tab_up:
         uploaded = st.file_uploader("Upload", type=['jpg','png','jpeg'], label_visibility="collapsed")
@@ -219,25 +219,20 @@ if st.session_state.step == 1:
             if snap: img_buffer = snap
             if st.button("❌ Close Camera"): st.session_state.cam_active = False; st.rerun()
 
-    # AUTO-ANALYSIS ON UPLOAD
     if img_buffer:
         try:
-            # Open and fix orientation
             img = Image.open(img_buffer)
             img = ImageOps.exif_transpose(img)
             st.session_state.input_image = img
             st.session_state.file_size_kb = img_buffer.size / 1024
             
-            # Analyze
-            with st.spinner("🔍 Analyzing image..."):
+            with st.spinner("🔍 Analyzing..."):
                 res = analyze_image(img, st.session_state.file_size_kb, selected)
                 st.session_state.validation_result = res
 
-            # SHOW REPORT
             st.divider()
             col1, col2 = st.columns([1, 1.5])
-            with col1:
-                st.image(img, caption="Original", width=150)
+            with col1: st.image(img, caption="Original", width=150)
             with col2:
                 metrics = {
                     "Check": ["Dimensions", "Size", "Face Position"],
@@ -249,58 +244,57 @@ if st.session_state.step == 1:
                 }
                 st.table(pd.DataFrame(metrics))
 
-            # ACTION BUTTONS
             if res['is_compliant']:
-                st.success("🎉 This photo matches all standards!")
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG")
-                st.download_button("⬇️ Download As-Is", buf.getvalue(), "compliant.jpg", "image/jpeg")
+                st.success("🎉 Perfect Match!")
+                buf = io.BytesIO(); img.save(buf, format="JPEG")
+                st.download_button("⬇️ Download Original", buf.getvalue(), "compliant.jpg", "image/jpeg")
                 st.write("--- OR ---")
             
-            if st.button("✨ Auto-Fix & Generate Passport Photo"):
+            btn_label = "✨ Auto-Fix (Keep BG)" if bg_choice == "Keep Original (Fixes Hair Issues)" else "✨ Auto-Fix (White BG)"
+            if st.button(btn_label):
                 st.session_state.step = 2; st.rerun()
                 
         except Exception as e:
-            st.error(f"Error reading image: {e}")
+            st.error(f"Error: {e}")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# STEP 2: PROCESSING
 elif st.session_state.step == 2:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown("### ⚡ Step 2: AI Processing")
+    st.markdown("### ⚡ Step 2: Processing")
     
     with st.status("🚀 Processing...", expanded=True) as status:
-        st.write("✂️ Removing background...")
-        st.write("📏 Aligning face geometry...")
+        if st.session_state.bg_mode == "Auto-Remove (White BG)":
+            st.write("✂️ Removing background...")
+        else:
+            st.write("🛡️ Preserving original background...")
+            
+        st.write("📏 Aligning geometry...")
         
         buf, error_msg = process_photo(
             st.session_state.input_image, 
             PHOTO_STANDARDS[st.session_state.selected_std],
-            st.session_state.target_quality
+            st.session_state.target_quality,
+            st.session_state.bg_mode # Passing the user choice
         )
         
         if buf is None:
             status.update(label="Failed!", state="error")
-            st.error(f"Processing failed: {error_msg}")
+            st.error(f"Error: {error_msg}")
             if st.button("⬅️ Go Back"): st.session_state.step = 1; st.rerun()
         else:
-            # Success Path
             st.session_state.processed_image = buf
-            st.session_state.final_size = error_msg # In success case, this is size
+            st.session_state.final_size = error_msg
             status.update(label="Done!", state="complete", expanded=False)
             st.session_state.step = 3; st.rerun()
             
     st.markdown('</div>', unsafe_allow_html=True)
 
-# STEP 3: RESULT
 elif st.session_state.step == 3:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### ✅ Step 3: Ready")
-    
     st.image(st.session_state.processed_image, caption=f"Size: {st.session_state.final_size:.1f} KB", width=250)
     st.download_button("⬇️ Download Photo", st.session_state.processed_image, "passport.jpg", "image/jpeg")
-    
     st.markdown(f'<br><a href="https://paypal.me/698789" target="_blank" class="paypal-btn">☕ Buy me a Coffee</a>', unsafe_allow_html=True)
     if st.button("🔄 Start Over"): st.session_state.step = 1; st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
