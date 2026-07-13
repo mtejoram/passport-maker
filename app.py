@@ -95,7 +95,10 @@ st.markdown("""
 @st.cache_resource(show_spinner=False)
 def load_ai_models():
     """Load heavy face detection models once."""
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    face_cascade = cv2.CascadeClassifier(cascade_path)
+    if face_cascade.empty():
+        raise RuntimeError(f"Could not load Haar cascade from {cascade_path}")
     return face_cascade
 
 # --- 4. SESSION STATE ---
@@ -120,7 +123,7 @@ def resize_if_huge(img, max_dim=1500):
 # --- 6. ICAO PROCESSING ENGINE ---
 def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
     try:
-        face_cascade = load_ai_models() # Use cached model
+        face_cascade = load_ai_models()  # Use cached model
         work_img = resize_if_huge(pil_img)
 
         # 1. Background Handling
@@ -178,6 +181,7 @@ def process_photo(pil_img, target_w, target_h, max_kb, bg_choice):
         
         # 4. Smart Compress
         quality = 100
+        out = io.BytesIO()
         while quality > 10:
             out = io.BytesIO()
             final_output.save(out, format="JPEG", quality=quality, subsampling=0)
