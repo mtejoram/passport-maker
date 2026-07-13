@@ -1,6 +1,5 @@
 streamlit
 rembg[cpu]
-opencv-python-headless==4.9.0.80
+opencv-python-headless<5
 numpy
 pillow
-pandas
